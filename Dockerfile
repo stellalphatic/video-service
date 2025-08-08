@@ -26,12 +26,16 @@ WORKDIR /app
 RUN git clone https://github.com/Winfredy/SadTalker.git ./SadTalker
 
 # Download SadTalker models using verified, working URLs.
-# Note: These links are more reliable than the previous GitHub release links.
+# Note: These links are from the official repository and should be more reliable.
 RUN mkdir -p ./SadTalker/checkpoints && \
+    # The gfpgan.pth link is still working.
     wget -O ./SadTalker/checkpoints/gfpgan.pth https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.4.pth && \
+    # Using a stable HuggingFace link for parsing_bisenet.pth.
     wget -O ./SadTalker/checkpoints/parsing_bisenet.pth https://huggingface.co/caocaocoa/1111/resolve/main/parsing_bisenet.pth && \
-    wget -O ./SadTalker/checkpoints/wav2lip.pth https://huggingface.co/spaces/Vin-J/SadTalker/resolve/main/wav2lip.pth && \
-    wget -O ./SadTalker/checkpoints/audio2coeff.pth https://huggingface.co/spaces/Vin-J/SadTalker/resolve/main/audio2coeff.pth
+    # Using a direct release link from the Winfredy/SadTalker repo for wav2lip.pth.
+    wget -O ./SadTalker/checkpoints/wav2lip.pth https://github.com/Winfredy/SadTalker/releases/download/v0.0.1/wav2lip.pth && \
+    # Using a direct release link from the Winfredy/SadTalker repo for audio2coeff.pth.
+    wget -O ./SadTalker/checkpoints/audio2coeff.pth https://github.com/Winfredy/SadTalker/releases/download/v0.0.2/audio2coeff.pth
 
 # Copy the application code and requirements
 COPY requirements.txt .
