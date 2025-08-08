@@ -29,7 +29,7 @@ RUN git clone https://github.com/Winfredy/SadTalker.git ./SadTalker
 # Note: These links are more reliable than the previous GitHub release links.
 RUN mkdir -p ./SadTalker/checkpoints && \
     wget -O ./SadTalker/checkpoints/gfpgan.pth https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.4.pth && \
-    wget -O ./SadTalker/checkpoints/face-parsing.pth https://github.com/TencentARC/GFPGAN/releases/download/v0.2/parsing_bisenet.pth && \
+    wget -O ./SadTalker/checkpoints/parsing_bisenet.pth https://huggingface.co/caocaocoa/1111/resolve/main/parsing_bisenet.pth && \
     wget -O ./SadTalker/checkpoints/wav2lip.pth https://github.com/TencentARC/SadTalker/releases/download/v0.0.2/wav2lip.pth && \
     wget -O ./SadTalker/checkpoints/audio2coeff.pth https://huggingface.co/spaces/Vin-J/SadTalker/resolve/main/audio2coeff.pth
 
