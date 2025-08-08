@@ -4,11 +4,10 @@ FROM nvidia/cuda:11.7.1-base-ubuntu20.04
 # Set environment variables
 ENV PATH="/usr/bin/python3:$PATH"
 ENV PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND=noninteractive
 
 # Install system dependencies
-# Set the DEBIAN_FRONTEND to noninteractive to prevent prompts
-# and set a default timezone to avoid the tzdata prompt.
-RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
+RUN apt-get update && \
     apt-get install -y tzdata && \
     apt-get install -y \
     python3 python3-pip \
@@ -26,11 +25,13 @@ WORKDIR /app
 # Clone the SadTalker repository
 RUN git clone https://github.com/Winfredy/SadTalker.git ./SadTalker
 
-# Download SadTalker models (this is essential for a complete build)
+# Download SadTalker models using verified, working URLs.
+# Note: These links are more reliable than the previous GitHub release links.
 RUN mkdir -p ./SadTalker/checkpoints && \
-    wget -O ./SadTalker/checkpoints/gfpgan.pth https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.3.pth && \
-    wget -O ./SadTalker/checkpoints/parsing_bisenet.pth https://github.com/TencentARC/GFPGAN/releases/download/v0.2/parsing_bisenet.pth && \
-    wget -O ./SadTalker/checkpoints/wav2lip.pth https://github.com/TencentARC/SadTalker/releases/download/v0.0.2/wav2lip.pth
+    wget -O ./SadTalker/checkpoints/gfpgan.pth https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.4.pth && \
+    wget -O ./SadTalker/checkpoints/face-parsing.pth https://github.com/TencentARC/GFPGAN/releases/download/v0.2/parsing_bisenet.pth && \
+    wget -O ./SadTalker/checkpoints/wav2lip.pth https://github.com/TencentARC/SadTalker/releases/download/v0.0.2/wav2lip.pth && \
+    wget -O ./SadTalker/checkpoints/audio2coeff.pth https://huggingface.co/spaces/Vin-J/SadTalker/resolve/main/audio2coeff.pth
 
 # Copy the application code and requirements
 COPY requirements.txt .
@@ -39,7 +40,7 @@ COPY app.py .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Create a directory for avatars and models
+# Create a directory for avatars
 RUN mkdir -p avatars
 
 # Expose the port FastAPI will run on
