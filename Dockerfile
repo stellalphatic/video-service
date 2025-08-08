@@ -6,7 +6,11 @@ ENV PATH="/usr/bin/python3:$PATH"
 ENV PYTHONUNBUFFERED=1
 
 # Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Set the DEBIAN_FRONTEND to noninteractive to prevent prompts
+# and set a default timezone to avoid the tzdata prompt.
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
+    apt-get install -y tzdata && \
+    apt-get install -y \
     python3 python3-pip \
     git \
     ffmpeg \
@@ -23,9 +27,10 @@ WORKDIR /app
 RUN git clone https://github.com/Winfredy/SadTalker.git ./SadTalker
 
 # Download SadTalker models (this is essential for a complete build)
-RUN wget -O ./SadTalker/checkpoints/gfpgan.pth https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.3.pth && \
-    wget -O ./SadTalker/checkpoints/face-parsing.pth https://github.com/TencentARC/GFPGAN/releases/download/v0.2/parsing_bisenet.pth && \
-    wget -O ./SadTalker/checkpoints/wav2lip.pth https://github.TencentARC/SadTalker/releases/download/v0.0.2/wav2lip.pth
+RUN mkdir -p ./SadTalker/checkpoints && \
+    wget -O ./SadTalker/checkpoints/gfpgan.pth https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.3.pth && \
+    wget -O ./SadTalker/checkpoints/parsing_bisenet.pth https://github.com/TencentARC/GFPGAN/releases/download/v0.2/parsing_bisenet.pth && \
+    wget -O ./SadTalker/checkpoints/wav2lip.pth https://github.com/TencentARC/SadTalker/releases/download/v0.0.2/wav2lip.pth
 
 # Copy the application code and requirements
 COPY requirements.txt .
