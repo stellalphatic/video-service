@@ -9,9 +9,9 @@ imageio-ffmpeg
 einops
 gfpgan
 face-alignment
-torch==1.13.1+cu117 # Match your GPU driver
-torchaudio==0.13.1+cu117
-torchvision==0.14.1+cu117
+torch==1.13.1
+torchaudio==0.13.1
+torchvision==0.14.1
 safetensors
 dlib
 librosa
