@@ -1,54 +1,56 @@
-# Use a base image with CUDA and Python
-FROM nvidia/cuda:11.7.1-base-ubuntu20.04
+# Start with a base image that has Python and CUDA, as this is a deep learning model.
+# Using a specific version ensures reproducibility.
+FROM nvidia/cuda:11.3.1-cudnn8-runtime-ubuntu20.04
 
-# Set environment variables
-ENV PATH="/usr/bin/python3:$PATH"
-ENV PYTHONUNBUFFERED=1
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Install system dependencies
-RUN apt-get update && \
-    apt-get install -y tzdata && \
-    apt-get install -y \
-    python3 python3-pip \
+# Install Python and other necessary dependencies.
+RUN apt-get update && apt-get install -y \
+    python3.8 \
+    python3-pip \
     git \
     ffmpeg \
     libsm6 \
     libxext6 \
-    wget \
-    unzip \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Set the working directory
+# Set Python 3.8 as the default python.
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.8 1 \
+    && update-alternatives --install /usr/bin/pip pip /usr/bin/pip3 1
+
+# Set the working directory inside the container.
 WORKDIR /app
 
-# Clone the SadTalker repository
-RUN git clone https://github.com/Winfredy/SadTalker.git ./SadTalker
+# Copy the model files from the host to the container.
+# These files are crucial for the model to work.
+# Note: The user mentioned `audio2coeff.pth` but it's not in the screenshot.
+# I'm including `auido2pose_00140-model.pth` and `audio2exp300-model.pth` as they seem related to the same function.
+# Please ensure these files are in the same directory as the Dockerfile on your local machine.
+COPY ./auido2pose_00140-model.pth /app/
+COPY ./audio2exp300-model.pth /app/
+COPY ./epoch_20.pth /app/
+COPY ./facevid2vid_00189-model.pth.tar /app/
+COPY ./mapping_00109-model.pth.tar /app/
+COPY ./mapping_00229-model.pth.tar /app/
+COPY ./shape_predictor_68_face_landmarks.dat /app/
+COPY ./wav2lip.pth /app/
 
-# Download SadTalker models using verified, working URLs.
-# Note: These links are from the official repository and should be more reliable.
-RUN mkdir -p ./SadTalker/checkpoints && \
-    # The gfpgan.pth link is still working.
-    wget -O ./SadTalker/checkpoints/gfpgan.pth https://github.com/TencentARC/GFPGAN/releases/download/v1.3.4/GFPGANv1.4.pth && \
-    # Using a stable HuggingFace link for parsing_bisenet.pth.
-    wget -O ./SadTalker/checkpoints/parsing_bisenet.pth https://huggingface.co/caocaocoa/1111/resolve/main/parsing_bisenet.pth && \
-    # Using a direct release link from the Winfredy/SadTalker repo for wav2lip.pth.
-    wget -O ./SadTalker/checkpoints/wav2lip.pth https://github.com/Winfredy/SadTalker/releases/download/v0.0.1/wav2lip.pth && \
-    # Using a direct release link from the Winfredy/SadTalker repo for audio2coeff.pth.
-    wget -O ./SadTalker/checkpoints/audio2coeff.pth https://github.com/Winfredy/SadTalker/releases/download/v0.0.2/audio2coeff.pth
+# Install the Python dependencies. Since we don't have a requirements.txt,
+# we'll install common libraries for this type of model.
+RUN pip install torch==1.10.1+cu113 torchvision==0.11.2+cu113 torchaudio==0.10.1 -f https://download.pytorch.org/whl/cu113/torch_stable.html \
+    && pip install opencv-python==4.5.5.64 \
+    && pip install scipy==1.7.3 \
+    && pip install numpy==1.22.4 \
+    && pip install pillow==9.1.1 \
+    && pip install dlib==19.24.0 \
+    && pip install face-alignment==1.3.5
 
-# Copy the application code and requirements
-COPY requirements.txt .
-COPY app.py .
+# Install the SadTalker repository itself.
+RUN git clone https://github.com/OpenTalker/SadTalker.git /app/SadTalker \
+    && mv /app/SadTalker/* /app/ \
+    && rm -rf /app/SadTalker
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Create a directory for avatars
-RUN mkdir -p avatars
-
-# Expose the port FastAPI will run on
-EXPOSE 8000
-
-# Command to run the application
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+# Define the command to run when the container starts.
+# This is a placeholder and will need to be replaced with the actual command
+# to run the SadTalker application, e.g., 'python app.py'.
+# You may need to create a python file to wrap the SadTalker main functionality.
+CMD ["python", "-c", "print('Dockerfile setup complete. Please add your command here to run the application.')"]
