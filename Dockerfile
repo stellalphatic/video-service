@@ -37,8 +37,10 @@ RUN git lfs install && git lfs pull
 # Install all the Python dependencies from the repository's requirements.txt file.
 RUN pip install --no-cache-dir -r requirements.txt
 
-# The SadTalker repository has its own models/ directory. Let's move all the model files from the root of the repo
-# into the models/ folder so the code can find them.
+# This is the new line to create the 'models' directory.
+RUN mkdir -p models/
+
+# Move the model files into the newly created 'models' folder.
 RUN mv audio2exp300-model.pth auido2pose_00140-model.pth wav2lip.pth models/
 
 # Define the command to run when the container starts.
