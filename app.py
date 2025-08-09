@@ -23,9 +23,7 @@ from pathlib import Path
 import asyncio
 from queue import Queue
 import threading
-import dlib
-import bz2
-import urllib.request
+import mediapipe as mp
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -50,90 +48,66 @@ if DEVICE == "cuda":
     logger.info(f"CUDA version: {torch.version.cuda}")
     logger.info(f"GPU count: {torch.cuda.device_count()}")
 
-# Initialize face detection models
-logger = logging.getLogger(__name__)
-
-# Download dlib face predictor if not exists
-PREDICTOR_PATH = "/app/models/shape_predictor_68_face_landmarks.dat"
-
-def download_face_predictor():
-    """Download dlib face predictor model"""
-    if not os.path.exists(PREDICTOR_PATH):
-        logger.info("Downloading face predictor model...")
-        import urllib.request
-        import bz2
-        
-        url = "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2"
-        temp_path = "/tmp/shape_predictor_68_face_landmarks.dat.bz2"
-        
-        try:
-            urllib.request.urlretrieve(url, temp_path)
-            
-            # Extract bz2 file
-            with bz2.BZ2File(temp_path, 'rb') as f_in:
-                with open(PREDICTOR_PATH, 'wb') as f_out:
-                    f_out.write(f_in.read())
-            
-            os.remove(temp_path)
-            logger.info("Face predictor model downloaded successfully")
-        except Exception as e:
-            logger.error(f"Failed to download face predictor: {e}")
-            # Create a dummy file to prevent repeated downloads
-            Path(PREDICTOR_PATH).touch()
-
-# Initialize face detection
-download_face_predictor()
-face_detector = dlib.get_frontal_face_detector()
-landmark_predictor = None
-
-if os.path.exists(PREDICTOR_PATH) and os.path.getsize(PREDICTOR_PATH) > 1000:
-    landmark_predictor = dlib.shape_predictor(PREDICTOR_PATH)
-    logger.info("Face landmark predictor loaded successfully")
-else:
-    logger.warning("Face landmark predictor not available - using basic animation")
+# Initialize MediaPipe Face Detection (lighter alternative to dlib)
+mp_face_detection = mp.solutions.face_detection
+mp_face_mesh = mp.solutions.face_mesh
+face_detection = mp_face_detection.FaceDetection(model_selection=0, min_detection_confidence=0.5)
+face_mesh = mp_face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1, refine_landmarks=True, min_detection_confidence=0.5)
 
 def detect_face_landmarks(image):
-    """Detect face landmarks in image"""
-    if landmark_predictor is None:
-        return None
-    
+    """Detect face landmarks using MediaPipe"""
     try:
-        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        faces = face_detector(gray)
+        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        results = face_mesh.process(rgb_image)
         
-        if len(faces) == 0:
+        if not results.multi_face_landmarks:
             logger.warning("No faces detected in image")
             return None
         
-        # Use the largest face
-        face = max(faces, key=lambda rect: rect.width() * rect.height())
-        landmarks = landmark_predictor(gray, face)
+        # Get the first face landmarks
+        face_landmarks = results.multi_face_landmarks[0]
+        height, width = image.shape[:2]
         
-        # Convert to numpy array
-        points = np.array([[p.x, p.y] for p in landmarks.parts()])
+        # Convert normalized coordinates to pixel coordinates
+        landmarks = []
+        for landmark in face_landmarks.landmark:
+            x = int(landmark.x * width)
+            y = int(landmark.y * height)
+            landmarks.append([x, y])
+        
+        landmarks = np.array(landmarks)
+        
+        # MediaPipe face mesh landmark indices for different facial features
+        # Mouth landmarks (lips)
+        mouth_indices = [61, 84, 17, 314, 405, 320, 307, 375, 321, 308, 324, 318]
+        # Eye landmarks
+        left_eye_indices = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]
+        right_eye_indices = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
+        
+        mouth_points = landmarks[mouth_indices] if len(landmarks) > max(mouth_indices) else landmarks[:12]
+        left_eye = landmarks[left_eye_indices] if len(landmarks) > max(left_eye_indices) else landmarks[33:49]
+        right_eye = landmarks[right_eye_indices] if len(landmarks) > max(right_eye_indices) else landmarks[42:48]
         
         return {
-            'face_rect': (face.left(), face.top(), face.width(), face.height()),
-            'landmarks': points,
-            'mouth_points': points[48:68],  # Mouth landmarks
-            'left_eye': points[36:42],      # Left eye landmarks
-            'right_eye': points[42:48],     # Right eye landmarks
-            'nose': points[27:36],          # Nose landmarks
-            'jaw': points[0:17],            # Jaw landmarks
+            'landmarks': landmarks,
+            'mouth_points': mouth_points,
+            'left_eye': left_eye,
+            'right_eye': right_eye,
+            'face_center': np.mean(landmarks, axis=0).astype(np.int32)
         }
+        
     except Exception as e:
         logger.error(f"Error detecting face landmarks: {e}")
         return None
 
 def make_dimensions_even(width: int, height: int) -> tuple:
     """Make dimensions even (divisible by 2) for H.264 compatibility while preserving aspect ratio"""
-    # Make even by subtracting 1 if odd (minimal change)
     even_width = width if width % 2 == 0 else width - 1
     even_height = height if height % 2 == 0 else height - 1
     return even_width, even_height
 
 def create_animated_talking_video(image_path: str, audio_path: str, output_path: str, quality: str = "high") -> str:
-    """Create animated talking video with proper face detection and lip sync"""
+    """Create animated talking video with MediaPipe face detection and lip sync"""
     try:
         logger.info(f"Creating animated talking video: {image_path} + {audio_path} -> {output_path}")
         
@@ -151,7 +125,7 @@ def create_animated_talking_video(image_path: str, audio_path: str, output_path:
             logger.warning("No face detected - using basic animation")
             return create_basic_animated_video(image_path, audio_path, output_path, quality)
         
-        logger.info("Face detected successfully with landmarks")
+        logger.info("Face detected successfully with MediaPipe")
         
         # Make dimensions even while preserving aspect ratio
         even_width, even_height = make_dimensions_even(original_width, original_height)
@@ -166,10 +140,10 @@ def create_animated_talking_video(image_path: str, audio_path: str, output_path:
             face_data['mouth_points'] = face_data['mouth_points'] * [scale_x, scale_y]
             face_data['left_eye'] = face_data['left_eye'] * [scale_x, scale_y]
             face_data['right_eye'] = face_data['right_eye'] * [scale_x, scale_y]
-            # Save the adjusted image
+            face_data['face_center'] = face_data['face_center'] * [scale_x, scale_y]
             cv2.imwrite(image_path, img)
         
-        # Get audio duration and properties
+        # Get audio duration
         result = subprocess.run([
             'ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
             '-of', 'default=noprint_wrappers=1:nokey=1', audio_path
@@ -178,12 +152,12 @@ def create_animated_talking_video(image_path: str, audio_path: str, output_path:
         duration = float(result.stdout.strip()) if result.stdout.strip() else 5.0
         logger.info(f"Audio duration: {duration} seconds")
         
-        # Create animated frames based on audio with face landmarks
+        # Create animated frames
         temp_frames_dir = tempfile.mkdtemp()
-        frame_rate = 25  # 25 FPS
+        frame_rate = 25
         total_frames = int(duration * frame_rate)
         
-        logger.info(f"Generating {total_frames} animated frames at {frame_rate} FPS with face animation")
+        logger.info(f"Generating {total_frames} animated frames at {frame_rate} FPS with MediaPipe face animation")
         
         # Analyze audio for animation data
         audio_analysis = analyze_audio_for_animation(audio_path, frame_rate)
@@ -243,7 +217,7 @@ def create_animated_talking_video(image_path: str, audio_path: str, output_path:
         raise
 
 def create_face_animated_frame(base_image: np.ndarray, face_data: dict, frame_idx: int, frame_rate: int, audio_data: dict) -> np.ndarray:
-    """Create an animated frame with realistic face movements based on landmarks"""
+    """Create an animated frame with realistic face movements based on MediaPipe landmarks"""
     try:
         img = base_image.copy()
         height, width = img.shape[:2]
@@ -260,19 +234,17 @@ def create_face_animated_frame(base_image: np.ndarray, face_data: dict, frame_id
         mouth_points = face_data['mouth_points'].astype(np.int32)
         left_eye = face_data['left_eye'].astype(np.int32)
         right_eye = face_data['right_eye'].astype(np.int32)
+        face_center = face_data['face_center'].astype(np.int32)
         
         # 1. Mouth animation based on audio
         if is_speaking and intensity > 0.1:
             # Calculate mouth opening based on audio intensity
-            mouth_opening_factor = min(intensity * 3, 1.0)  # Scale intensity
+            mouth_opening_factor = min(intensity * 3, 1.0)
             
-            # Get mouth center
+            # Get mouth center from landmarks
             mouth_center = np.mean(mouth_points, axis=0).astype(np.int32)
             
-            # Create mouth opening by modifying mouth region
-            mouth_region_mask = np.zeros(img.shape[:2], dtype=np.uint8)
-            
-            # Create elliptical mouth opening
+            # Create mouth opening effect
             mouth_width = int(20 + intensity * 15)
             mouth_height = int(5 + intensity * 12)
             
@@ -283,30 +255,25 @@ def create_face_animated_frame(base_image: np.ndarray, face_data: dict, frame_id
                 mouth_width = int(mouth_width * 1.2)
             
             # Draw mouth opening
-            cv2.ellipse(mouth_region_mask, tuple(mouth_center), (mouth_width, mouth_height), 0, 0, 360, 255, -1)
-            
-            # Apply mouth opening effect
-            mouth_color = np.array([20, 20, 20])  # Dark mouth interior
-            img[mouth_region_mask > 0] = mouth_color
+            cv2.ellipse(img, tuple(mouth_center), (mouth_width, mouth_height), 0, 0, 180, (20, 20, 20), -1)
             
             # Add teeth for realism
             if mouth_height > 8:
-                teeth_mask = np.zeros(img.shape[:2], dtype=np.uint8)
-                cv2.ellipse(teeth_mask, tuple(mouth_center), (mouth_width - 4, max(2, mouth_height - 4)), 0, 0, 180, 255, -1)
-                teeth_color = np.array([220, 220, 220])
-                img[teeth_mask > 0] = teeth_color
+                cv2.ellipse(img, tuple(mouth_center), (mouth_width - 4, max(2, mouth_height - 4)), 0, 0, 180, (220, 220, 220), -1)
         
         # 2. Eye blinking animation
         if frame_idx % 150 == 0 or (frame_idx % 75 == 0 and np.random.random() < 0.3):
-            # Create blink effect
+            # Create blink effect by darkening eye regions
             for eye_points in [left_eye, right_eye]:
-                eye_mask = np.zeros(img.shape[:2], dtype=np.uint8)
-                cv2.fillPoly(eye_mask, [eye_points], 255)
-                
-                # Darken eye area for blink
-                img[eye_mask > 0] = img[eye_mask > 0] * 0.3
+                if len(eye_points) > 0:
+                    # Create eye mask
+                    eye_mask = np.zeros(img.shape[:2], dtype=np.uint8)
+                    cv2.fillPoly(eye_mask, [eye_points], 255)
+                    
+                    # Darken eye area for blink
+                    img[eye_mask > 0] = img[eye_mask > 0] * 0.3
         
-        # 3. Subtle head movement (breathing/idle animation)
+        # 3. Subtle head movement
         if is_speaking:
             # More pronounced movement when speaking
             head_sway_x = int(3 * np.sin(time_sec * 1.2) * intensity)
@@ -320,12 +287,6 @@ def create_face_animated_frame(base_image: np.ndarray, face_data: dict, frame_id
         if abs(head_sway_x) > 0 or abs(head_bob_y) > 0:
             M = np.float32([[1, 0, head_sway_x], [0, 1, head_bob_y]])
             img = cv2.warpAffine(img, M, (width, height), borderMode=cv2.BORDER_REPLICATE)
-        
-        # 4. Facial expression changes
-        if is_speaking and intensity > 0.3:
-            # Slight eyebrow raise during intense speech
-            # This is a simplified version - in production you'd use more sophisticated facial rig
-            pass
         
         return img
         
