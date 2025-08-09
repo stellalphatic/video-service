@@ -160,6 +160,34 @@ def download_sadtalker_models():
             gfpgan_url = "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth"
             download_file_with_progress(gfpgan_url, gfpgan_model)
         
+        # Download additional SadTalker models
+        additional_models = [
+            {
+                "url": "https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/mapping_00109-model.pth.tar",
+                "path": checkpoints_dir / "mapping_00109-model.pth.tar"
+            },
+            {
+                "url": "https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/mapping_00229-model.pth.tar", 
+                "path": checkpoints_dir / "mapping_00229-model.pth.tar"
+            },
+            {
+                "url": "https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/SadTalker_V0.0.2_256.safetensors",
+                "path": checkpoints_dir / "SadTalker_V0.0.2_256.safetensors"
+            },
+            {
+                "url": "https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/SadTalker_V0.0.2_512.safetensors",
+                "path": checkpoints_dir / "SadTalker_V0.0.2_512.safetensors"
+            }
+        ]
+        
+        for model in additional_models:
+            if not model["path"].exists():
+                success = download_file_with_progress(model["url"], model["path"])
+                if not success:
+                    logger.warning(f"⚠️ Failed to download {model['path'].name}")
+            else:
+                logger.info(f"✅ {model['path'].name} already exists")
+        
         logger.info("✅ SadTalker models download completed")
         return True
         
