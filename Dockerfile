@@ -1,4 +1,4 @@
-FROM nvidia/cuda:11.2-runtime-ubuntu20.04
+FROM nvidia/cuda:11.8-base-ubuntu20.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
