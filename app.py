@@ -23,6 +23,9 @@ from pathlib import Path
 import asyncio
 from queue import Queue
 import threading
+import dlib
+import bz2
+import urllib.request
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -47,6 +50,81 @@ if DEVICE == "cuda":
     logger.info(f"CUDA version: {torch.version.cuda}")
     logger.info(f"GPU count: {torch.cuda.device_count()}")
 
+# Initialize face detection models
+logger = logging.getLogger(__name__)
+
+# Download dlib face predictor if not exists
+PREDICTOR_PATH = "/app/models/shape_predictor_68_face_landmarks.dat"
+
+def download_face_predictor():
+    """Download dlib face predictor model"""
+    if not os.path.exists(PREDICTOR_PATH):
+        logger.info("Downloading face predictor model...")
+        import urllib.request
+        import bz2
+        
+        url = "http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2"
+        temp_path = "/tmp/shape_predictor_68_face_landmarks.dat.bz2"
+        
+        try:
+            urllib.request.urlretrieve(url, temp_path)
+            
+            # Extract bz2 file
+            with bz2.BZ2File(temp_path, 'rb') as f_in:
+                with open(PREDICTOR_PATH, 'wb') as f_out:
+                    f_out.write(f_in.read())
+            
+            os.remove(temp_path)
+            logger.info("Face predictor model downloaded successfully")
+        except Exception as e:
+            logger.error(f"Failed to download face predictor: {e}")
+            # Create a dummy file to prevent repeated downloads
+            Path(PREDICTOR_PATH).touch()
+
+# Initialize face detection
+download_face_predictor()
+face_detector = dlib.get_frontal_face_detector()
+landmark_predictor = None
+
+if os.path.exists(PREDICTOR_PATH) and os.path.getsize(PREDICTOR_PATH) > 1000:
+    landmark_predictor = dlib.shape_predictor(PREDICTOR_PATH)
+    logger.info("Face landmark predictor loaded successfully")
+else:
+    logger.warning("Face landmark predictor not available - using basic animation")
+
+def detect_face_landmarks(image):
+    """Detect face landmarks in image"""
+    if landmark_predictor is None:
+        return None
+    
+    try:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        faces = face_detector(gray)
+        
+        if len(faces) == 0:
+            logger.warning("No faces detected in image")
+            return None
+        
+        # Use the largest face
+        face = max(faces, key=lambda rect: rect.width() * rect.height())
+        landmarks = landmark_predictor(gray, face)
+        
+        # Convert to numpy array
+        points = np.array([[p.x, p.y] for p in landmarks.parts()])
+        
+        return {
+            'face_rect': (face.left(), face.top(), face.width(), face.height()),
+            'landmarks': points,
+            'mouth_points': points[48:68],  # Mouth landmarks
+            'left_eye': points[36:42],      # Left eye landmarks
+            'right_eye': points[42:48],     # Right eye landmarks
+            'nose': points[27:36],          # Nose landmarks
+            'jaw': points[0:17],            # Jaw landmarks
+        }
+    except Exception as e:
+        logger.error(f"Error detecting face landmarks: {e}")
+        return None
+
 def make_dimensions_even(width: int, height: int) -> tuple:
     """Make dimensions even (divisible by 2) for H.264 compatibility while preserving aspect ratio"""
     # Make even by subtracting 1 if odd (minimal change)
@@ -55,7 +133,7 @@ def make_dimensions_even(width: int, height: int) -> tuple:
     return even_width, even_height
 
 def create_animated_talking_video(image_path: str, audio_path: str, output_path: str, quality: str = "high") -> str:
-    """Create animated talking video with lip sync and head movements"""
+    """Create animated talking video with proper face detection and lip sync"""
     try:
         logger.info(f"Creating animated talking video: {image_path} + {audio_path} -> {output_path}")
         
@@ -67,12 +145,27 @@ def create_animated_talking_video(image_path: str, audio_path: str, output_path:
         original_height, original_width = img.shape[:2]
         logger.info(f"Original image dimensions: {original_width}x{original_height}")
         
+        # Detect face landmarks
+        face_data = detect_face_landmarks(img)
+        if face_data is None:
+            logger.warning("No face detected - using basic animation")
+            return create_basic_animated_video(image_path, audio_path, output_path, quality)
+        
+        logger.info("Face detected successfully with landmarks")
+        
         # Make dimensions even while preserving aspect ratio
         even_width, even_height = make_dimensions_even(original_width, original_height)
         
         if even_width != original_width or even_height != original_height:
             logger.info(f"Adjusting dimensions from {original_width}x{original_height} to {even_width}x{even_height}")
             img = cv2.resize(img, (even_width, even_height))
+            # Recalculate face landmarks for resized image
+            scale_x = even_width / original_width
+            scale_y = even_height / original_height
+            face_data['landmarks'] = face_data['landmarks'] * [scale_x, scale_y]
+            face_data['mouth_points'] = face_data['mouth_points'] * [scale_x, scale_y]
+            face_data['left_eye'] = face_data['left_eye'] * [scale_x, scale_y]
+            face_data['right_eye'] = face_data['right_eye'] * [scale_x, scale_y]
             # Save the adjusted image
             cv2.imwrite(image_path, img)
         
@@ -85,27 +178,28 @@ def create_animated_talking_video(image_path: str, audio_path: str, output_path:
         duration = float(result.stdout.strip()) if result.stdout.strip() else 5.0
         logger.info(f"Audio duration: {duration} seconds")
         
-        # Create animated frames based on audio
+        # Create animated frames based on audio with face landmarks
         temp_frames_dir = tempfile.mkdtemp()
         frame_rate = 25  # 25 FPS
         total_frames = int(duration * frame_rate)
         
-        logger.info(f"Generating {total_frames} animated frames at {frame_rate} FPS")
+        logger.info(f"Generating {total_frames} animated frames at {frame_rate} FPS with face animation")
         
         # Analyze audio for animation data
         audio_analysis = analyze_audio_for_animation(audio_path, frame_rate)
         
-        # Generate animated frames
+        # Generate animated frames with face landmarks
         for frame_idx in range(total_frames):
-            animated_frame = create_animated_frame(
+            animated_frame = create_face_animated_frame(
                 img.copy(), 
+                face_data,
                 frame_idx, 
                 frame_rate, 
-                audio_analysis.get(frame_idx, 0.0)
+                audio_analysis.get(frame_idx, {'intensity': 0.0, 'is_speaking': False})
             )
             
             frame_path = os.path.join(temp_frames_dir, f"frame_{frame_idx:06d}.jpg")
-            cv2.imwrite(frame_path, animated_frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            cv2.imwrite(frame_path, animated_frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
         
         # Create video from animated frames
         frames_pattern = os.path.join(temp_frames_dir, "frame_%06d.jpg")
@@ -125,7 +219,7 @@ def create_animated_talking_video(image_path: str, audio_path: str, output_path:
             cmd = [
                 'ffmpeg', '-r', str(frame_rate), '-i', frames_pattern,
                 '-i', audio_path,
-                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+                '-c:v', 'libx264', '-preset', 'fast', '-crf', '23',
                 '-c:a', 'aac', '-b:a', '128k',
                 '-pix_fmt', 'yuv420p',
                 '-shortest', '-movflags', '+faststart',
@@ -138,7 +232,7 @@ def create_animated_talking_video(image_path: str, audio_path: str, output_path:
         # Cleanup temp frames
         shutil.rmtree(temp_frames_dir, ignore_errors=True)
         
-        logger.info(f"Animated talking video created: {output_path}")
+        logger.info(f"Animated talking video created successfully: {output_path}")
         return output_path
         
     except subprocess.CalledProcessError as e:
@@ -147,6 +241,191 @@ def create_animated_talking_video(image_path: str, audio_path: str, output_path:
     except Exception as e:
         logger.error(f"Error creating animated video: {e}")
         raise
+
+def create_face_animated_frame(base_image: np.ndarray, face_data: dict, frame_idx: int, frame_rate: int, audio_data: dict) -> np.ndarray:
+    """Create an animated frame with realistic face movements based on landmarks"""
+    try:
+        img = base_image.copy()
+        height, width = img.shape[:2]
+        
+        # Extract audio features
+        intensity = audio_data.get('intensity', 0.0)
+        is_speaking = audio_data.get('is_speaking', False)
+        spectral_centroid = audio_data.get('spectral_centroid', 0.0)
+        
+        # Time-based animation
+        time_sec = frame_idx / frame_rate
+        
+        # Get face landmarks
+        mouth_points = face_data['mouth_points'].astype(np.int32)
+        left_eye = face_data['left_eye'].astype(np.int32)
+        right_eye = face_data['right_eye'].astype(np.int32)
+        
+        # 1. Mouth animation based on audio
+        if is_speaking and intensity > 0.1:
+            # Calculate mouth opening based on audio intensity
+            mouth_opening_factor = min(intensity * 3, 1.0)  # Scale intensity
+            
+            # Get mouth center
+            mouth_center = np.mean(mouth_points, axis=0).astype(np.int32)
+            
+            # Create mouth opening by modifying mouth region
+            mouth_region_mask = np.zeros(img.shape[:2], dtype=np.uint8)
+            
+            # Create elliptical mouth opening
+            mouth_width = int(20 + intensity * 15)
+            mouth_height = int(5 + intensity * 12)
+            
+            # Different mouth shapes based on spectral content
+            if spectral_centroid > 1500:  # Higher frequencies - more open mouth
+                mouth_height = int(mouth_height * 1.3)
+            elif spectral_centroid < 800:  # Lower frequencies - wider mouth
+                mouth_width = int(mouth_width * 1.2)
+            
+            # Draw mouth opening
+            cv2.ellipse(mouth_region_mask, tuple(mouth_center), (mouth_width, mouth_height), 0, 0, 360, 255, -1)
+            
+            # Apply mouth opening effect
+            mouth_color = np.array([20, 20, 20])  # Dark mouth interior
+            img[mouth_region_mask > 0] = mouth_color
+            
+            # Add teeth for realism
+            if mouth_height > 8:
+                teeth_mask = np.zeros(img.shape[:2], dtype=np.uint8)
+                cv2.ellipse(teeth_mask, tuple(mouth_center), (mouth_width - 4, max(2, mouth_height - 4)), 0, 0, 180, 255, -1)
+                teeth_color = np.array([220, 220, 220])
+                img[teeth_mask > 0] = teeth_color
+        
+        # 2. Eye blinking animation
+        if frame_idx % 150 == 0 or (frame_idx % 75 == 0 and np.random.random() < 0.3):
+            # Create blink effect
+            for eye_points in [left_eye, right_eye]:
+                eye_mask = np.zeros(img.shape[:2], dtype=np.uint8)
+                cv2.fillPoly(eye_mask, [eye_points], 255)
+                
+                # Darken eye area for blink
+                img[eye_mask > 0] = img[eye_mask > 0] * 0.3
+        
+        # 3. Subtle head movement (breathing/idle animation)
+        if is_speaking:
+            # More pronounced movement when speaking
+            head_sway_x = int(3 * np.sin(time_sec * 1.2) * intensity)
+            head_bob_y = int(2 * np.sin(time_sec * 0.8) * intensity)
+        else:
+            # Subtle idle movement
+            head_sway_x = int(1 * np.sin(time_sec * 0.3))
+            head_bob_y = int(1 * np.sin(time_sec * 0.2))
+        
+        # Apply head movement
+        if abs(head_sway_x) > 0 or abs(head_bob_y) > 0:
+            M = np.float32([[1, 0, head_sway_x], [0, 1, head_bob_y]])
+            img = cv2.warpAffine(img, M, (width, height), borderMode=cv2.BORDER_REPLICATE)
+        
+        # 4. Facial expression changes
+        if is_speaking and intensity > 0.3:
+            # Slight eyebrow raise during intense speech
+            # This is a simplified version - in production you'd use more sophisticated facial rig
+            pass
+        
+        return img
+        
+    except Exception as e:
+        logger.error(f"Error creating face animated frame {frame_idx}: {e}")
+        return base_image
+
+def create_basic_animated_video(image_path: str, audio_path: str, output_path: str, quality: str = "high") -> str:
+    """Fallback basic animation when face detection fails"""
+    logger.info("Using basic animation fallback")
+    
+    # Load image
+    img = cv2.imread(image_path)
+    if img is None:
+        raise ValueError(f"Could not load image: {image_path}")
+    
+    height, width = img.shape[:2]
+    even_width, even_height = make_dimensions_even(width, height)
+    
+    if even_width != width or even_height != height:
+        img = cv2.resize(img, (even_width, even_height))
+        cv2.imwrite(image_path, img)
+    
+    # Get audio duration
+    result = subprocess.run([
+        'ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
+        '-of', 'default=noprint_wrappers=1:nokey=1', audio_path
+    ], capture_output=True, text=True)
+    
+    duration = float(result.stdout.strip()) if result.stdout.strip() else 5.0
+    
+    # Create simple animated frames
+    temp_frames_dir = tempfile.mkdtemp()
+    frame_rate = 25
+    total_frames = int(duration * frame_rate)
+    
+    audio_analysis = analyze_audio_for_animation(audio_path, frame_rate)
+    
+    for frame_idx in range(total_frames):
+        # Basic animation without face detection
+        animated_frame = create_basic_animated_frame(
+            img.copy(), 
+            frame_idx, 
+            frame_rate, 
+            audio_analysis.get(frame_idx, {'intensity': 0.0, 'is_speaking': False})
+        )
+        
+        frame_path = os.path.join(temp_frames_dir, f"frame_{frame_idx:06d}.jpg")
+        cv2.imwrite(frame_path, animated_frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+    
+    # Create video
+    frames_pattern = os.path.join(temp_frames_dir, "frame_%06d.jpg")
+    
+    cmd = [
+        'ffmpeg', '-r', str(frame_rate), '-i', frames_pattern,
+        '-i', audio_path,
+        '-c:v', 'libx264', '-preset', 'medium', '-crf', '20',
+        '-c:a', 'aac', '-b:a', '192k',
+        '-pix_fmt', 'yuv420p',
+        '-shortest', '-movflags', '+faststart',
+        output_path, '-y'
+    ]
+    
+    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    shutil.rmtree(temp_frames_dir, ignore_errors=True)
+    
+    return output_path
+
+def create_basic_animated_frame(base_image: np.ndarray, frame_idx: int, frame_rate: int, audio_data: dict) -> np.ndarray:
+    """Create basic animated frame without face detection"""
+    img = base_image.copy()
+    height, width = img.shape[:2]
+    
+    intensity = audio_data.get('intensity', 0.0)
+    is_speaking = audio_data.get('is_speaking', False)
+    time_sec = frame_idx / frame_rate
+    
+    # Basic mouth animation in center-bottom area
+    if is_speaking and intensity > 0.1:
+        mouth_center_x = width // 2
+        mouth_center_y = int(height * 0.75)
+        
+        mouth_width = int(15 + intensity * 20)
+        mouth_height = int(5 + intensity * 10)
+        
+        # Draw simple mouth
+        cv2.ellipse(img, (mouth_center_x, mouth_center_y), (mouth_width, mouth_height), 0, 0, 180, (20, 20, 20), -1)
+        
+        if mouth_height > 6:
+            cv2.ellipse(img, (mouth_center_x, mouth_center_y - 2), (mouth_width - 3, max(1, mouth_height - 4)), 0, 0, 180, (200, 200, 200), -1)
+    
+    # Basic head movement
+    head_sway_x = int(2 * np.sin(time_sec * 0.5) * intensity) if is_speaking else int(1 * np.sin(time_sec * 0.3))
+    head_bob_y = int(1 * np.sin(time_sec * 0.3) * intensity) if is_speaking else int(1 * np.sin(time_sec * 0.2))
+    
+    if abs(head_sway_x) > 0 or abs(head_bob_y) > 0:
+        M = np.float32([[1, 0, head_sway_x], [0, 1, head_bob_y]])
+        img = cv2.warpAffine(img, M, (width, height), borderMode=cv2.BORDER_REPLICATE)
+    
+    return img
 
 def analyze_audio_for_animation(audio_path: str, frame_rate: int) -> dict:
     """Analyze audio to extract animation data for each frame"""
@@ -242,86 +521,6 @@ def simple_audio_analysis(audio_path: str, frame_rate: int) -> dict:
     except Exception as e:
         logger.error(f"Error in simple audio analysis: {e}")
         return {}
-
-def create_animated_frame(base_image: np.ndarray, frame_idx: int, frame_rate: int, audio_data: dict) -> np.ndarray:
-    """Create an animated frame with lip sync and subtle movements"""
-    try:
-        img = base_image.copy()
-        height, width = img.shape[:2]
-        
-        # Extract audio features
-        intensity = audio_data.get('intensity', 0.0)
-        is_speaking = audio_data.get('is_speaking', False)
-        spectral_centroid = audio_data.get('spectral_centroid', 0.0)
-        
-        # Time-based animation
-        time_sec = frame_idx / frame_rate
-        
-        # 1. Subtle head movement (breathing/idle animation)
-        head_sway_x = int(2 * np.sin(time_sec * 0.5))  # Slow horizontal sway
-        head_bob_y = int(1 * np.sin(time_sec * 0.3))   # Slow vertical bob
-        
-        # 2. Eye blinking (random blinks)
-        if frame_idx % 180 == 0 or (frame_idx % 90 == 0 and np.random.random() < 0.3):
-            # Add blink effect (darken eye area slightly)
-            eye_region_y = int(height * 0.35)
-            eye_region_height = int(height * 0.1)
-            if eye_region_y + eye_region_height < height:
-                img[eye_region_y:eye_region_y + eye_region_height, :] = \
-                    img[eye_region_y:eye_region_y + eye_region_height, :] * 0.7
-        
-        # 3. Mouth animation based on audio
-        mouth_center_x = width // 2
-        mouth_center_y = int(height * 0.75)  # Assume mouth is at 75% down
-        
-        if is_speaking and intensity > 0.1:
-            # Calculate mouth opening based on audio intensity
-            mouth_width = int(15 + intensity * 25)
-            mouth_height = int(5 + intensity * 15)
-            
-            # Different mouth shapes based on spectral content
-            if spectral_centroid > 1500:  # Higher frequencies - more open mouth
-                mouth_height = int(mouth_height * 1.5)
-            
-            # Draw mouth opening (simple oval)
-            mouth_color = (20, 20, 20)  # Dark mouth interior
-            
-            # Ensure mouth stays within image bounds
-            if (mouth_center_y - mouth_height >= 0 and 
-                mouth_center_y + mouth_height < height and
-                mouth_center_x - mouth_width >= 0 and
-                mouth_center_x + mouth_width < width):
-                
-                cv2.ellipse(img, 
-                           (mouth_center_x, mouth_center_y), 
-                           (mouth_width, mouth_height), 
-                           0, 0, 180, mouth_color, -1)
-                
-                # Add teeth/tongue for realism
-                if mouth_height > 8:
-                    teeth_color = (200, 200, 200)
-                    cv2.ellipse(img, 
-                               (mouth_center_x, mouth_center_y - 2), 
-                               (mouth_width - 3, max(1, mouth_height - 5)), 
-                               0, 0, 180, teeth_color, -1)
-        
-        # 4. Apply subtle head movement
-        if head_sway_x != 0 or head_bob_y != 0:
-            M = np.float32([[1, 0, head_sway_x], [0, 1, head_bob_y]])
-            img = cv2.warpAffine(img, M, (width, height), borderMode=cv2.BORDER_REPLICATE)
-        
-        # 5. Add slight color variation for liveliness (very subtle)
-        if is_speaking:
-            # Slightly warm the face during speaking
-            face_region = img[int(height*0.2):int(height*0.8), int(width*0.2):int(width*0.8)]
-            if face_region.size > 0:
-                face_region[:, :, 2] = np.clip(face_region[:, :, 2] * 1.02, 0, 255)  # Slight red boost
-        
-        return img
-        
-    except Exception as e:
-        logger.error(f"Error creating animated frame {frame_idx}: {e}")
-        return base_image
 
 # --- Model Management Classes ---
 class SadTalkerModel:
