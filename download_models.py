@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Download required models for video generation service
-Non-interactive model downloads with proper error handling
+Professional model downloader for video generation service
+Downloads SadTalker, Wav2Lip, and other required models
 """
 import os
 import sys
@@ -11,6 +11,7 @@ import zipfile
 import tarfile
 import gzip
 import shutil
+import subprocess
 from pathlib import Path
 from urllib.parse import urlparse
 import hashlib
@@ -30,7 +31,7 @@ TIMEOUT = 600  # 10 minutes timeout for large downloads
 def download_file_with_progress(url: str, destination: Path, expected_hash: str = None):
     """Download file with progress and hash verification"""
     try:
-        logger.info(f"Downloading {url}")
+        logger.info(f"📥 Downloading {url}")
         
         response = requests.get(url, stream=True, timeout=TIMEOUT)
         response.raise_for_status()
@@ -45,57 +46,57 @@ def download_file_with_progress(url: str, destination: Path, expected_hash: str 
                 if chunk:
                     f.write(chunk)
                     downloaded += len(chunk)
-                    if total_size > 0:
+                    if total_size > 0 and downloaded % (1024 * 1024 * 10) == 0:  # Log every 10MB
                         percent = (downloaded / total_size) * 100
-                        if downloaded % (1024 * 1024) == 0:  # Log every MB
-                            logger.info(f"Downloaded {downloaded // (1024*1024)}MB / {total_size // (1024*1024)}MB ({percent:.1f}%)")
+                        logger.info(f"📊 Progress: {downloaded // (1024*1024)}MB / {total_size // (1024*1024)}MB ({percent:.1f}%)")
         
         # Verify hash if provided
         if expected_hash:
             file_hash = hashlib.md5(destination.read_bytes()).hexdigest()
             if file_hash != expected_hash:
-                logger.error(f"Hash mismatch for {destination.name}")
+                logger.error(f"❌ Hash mismatch for {destination.name}")
                 destination.unlink()
                 return False
         
-        logger.info(f"Successfully downloaded {destination.name}")
+        logger.info(f"✅ Successfully downloaded {destination.name}")
         return True
         
     except Exception as e:
-        logger.error(f"Failed to download {url}: {e}")
+        logger.error(f"❌ Failed to download {url}: {e}")
         if destination.exists():
             destination.unlink()
         return False
 
-def extract_archive(archive_path: Path, extract_to: Path):
-    """Extract various archive formats"""
+def clone_repository(repo_url: str, destination: Path):
+    """Clone a git repository"""
     try:
-        logger.info(f"Extracting {archive_path.name}")
+        if destination.exists():
+            logger.info(f"📁 Repository already exists: {destination}")
+            return True
         
-        if archive_path.suffix == '.zip':
-            with zipfile.ZipFile(archive_path, 'r') as zip_ref:
-                zip_ref.extractall(extract_to)
-        elif archive_path.suffix in ['.tar', '.tar.gz', '.tgz']:
-            with tarfile.open(archive_path, 'r:*') as tar_ref:
-                tar_ref.extractall(extract_to)
-        elif archive_path.suffix == '.gz':
-            with gzip.open(archive_path, 'rb') as gz_file:
-                with open(extract_to / archive_path.stem, 'wb') as out_file:
-                    shutil.copyfileobj(gz_file, out_file)
+        logger.info(f"📥 Cloning repository: {repo_url}")
+        subprocess.run([
+            "git", "clone", "--depth", "1", repo_url, str(destination)
+        ], check=True, capture_output=True)
         
-        logger.info(f"Extracted {archive_path.name}")
+        logger.info(f"✅ Repository cloned: {destination}")
         return True
         
-    except Exception as e:
-        logger.error(f"Failed to extract {archive_path}: {e}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"❌ Failed to clone repository {repo_url}: {e}")
         return False
 
 def download_sadtalker_models():
-    """Download SadTalker models from official sources"""
+    """Download SadTalker models and repository"""
     try:
-        logger.info("=== Downloading SadTalker Models ===")
+        logger.info("🎭 === Downloading SadTalker Models ===")
         
+        # Clone SadTalker repository
         sadtalker_dir = Path(MODELS_DIR) / "SadTalker"
+        if not clone_repository("https://github.com/OpenTalker/SadTalker.git", sadtalker_dir):
+            logger.error("❌ Failed to clone SadTalker repository")
+            return False
+        
         checkpoints_dir = sadtalker_dir / "checkpoints"
         gfpgan_dir = sadtalker_dir / "gfpgan" / "weights"
         
@@ -103,7 +104,7 @@ def download_sadtalker_models():
         checkpoints_dir.mkdir(parents=True, exist_ok=True)
         gfpgan_dir.mkdir(parents=True, exist_ok=True)
         
-        # SadTalker model URLs (from official repo)
+        # SadTalker model URLs (from official releases)
         models = {
             "auido2exp_00300-model.pth": {
                 "url": "https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/auido2exp_00300-model.pth",
@@ -140,18 +141,17 @@ def download_sadtalker_models():
             if not model_info["path"].exists():
                 success = download_file_with_progress(model_info["url"], model_info["path"])
                 if not success:
-                    logger.warning(f"Failed to download {model_name}, will try alternative source")
-                    # Try alternative source
-                    alt_url = f"https://huggingface.co/vinthony/SadTalker/resolve/main/checkpoints/{model_name}"
-                    download_file_with_progress(alt_url, model_info["path"])
+                    logger.warning(f"⚠️ Failed to download {model_name}")
             else:
-                logger.info(f"{model_name} already exists")
+                logger.info(f"✅ {model_name} already exists")
         
         # Extract archives
         for archive_name in ["BFM_Fitting.zip", "hub.zip"]:
             archive_path = checkpoints_dir / archive_name
             if archive_path.exists():
-                extract_archive(archive_path, checkpoints_dir)
+                logger.info(f"📦 Extracting {archive_name}")
+                with zipfile.ZipFile(archive_path, 'r') as zip_ref:
+                    zip_ref.extractall(checkpoints_dir)
                 archive_path.unlink()  # Remove archive after extraction
         
         # Download GFPGAN weights for face enhancement
@@ -161,178 +161,175 @@ def download_sadtalker_models():
             download_file_with_progress(gfpgan_url, gfpgan_model)
         
         logger.info("✅ SadTalker models download completed")
+        return True
         
     except Exception as e:
-        logger.error(f"Error downloading SadTalker models: {e}")
+        logger.error(f"❌ Error downloading SadTalker models: {e}")
+        return False
 
 def download_wav2lip_models():
-    """Download Wav2Lip models"""
+    """Download Wav2Lip models and repository"""
     try:
-        logger.info("=== Downloading Wav2Lip Models ===")
+        logger.info("🎤 === Downloading Wav2Lip Models ===")
         
+        # Clone Wav2Lip repository
         wav2lip_dir = Path(MODELS_DIR) / "Wav2Lip"
-        wav2lip_dir.mkdir(parents=True, exist_ok=True)
+        if not clone_repository("https://github.com/Rudrabha/Wav2Lip.git", wav2lip_dir):
+            logger.error("❌ Failed to clone Wav2Lip repository")
+            return False
         
         # Wav2Lip models
         models = {
             "wav2lip_gan.pth": {
                 "url": "https://iiitaphyd-my.sharepoint.com/personal/radrabha_m_research_iiit_ac_in/_layouts/15/download.aspx?share=EdjI7bZlgApMqsVoEUUXpLsBxqXbn5z8VTmoxp2pgHDtDw",
-                "alt_url": "https://github.com/Rudrabha/Wav2Lip/releases/download/v1.0.0/wav2lip_gan.pth"
+                "alt_url": "https://github.com/Rudrabha/Wav2Lip/releases/download/v1.0.0/wav2lip_gan.pth",
+                "path": wav2lip_dir / "wav2lip_gan.pth"
             },
             "wav2lip.pth": {
                 "url": "https://iiitaphyd-my.sharepoint.com/personal/radrabha_m_research_iiit_ac_in/_layouts/15/download.aspx?share=EQRvdUzUeXxOQSVNw2kSwBwBSqkqJfMGaT4J_6TL-I4GlA",
-                "alt_url": "https://github.com/Rudrabha/Wav2Lip/releases/download/v1.0.0/wav2lip.pth"
+                "alt_url": "https://github.com/Rudrabha/Wav2Lip/releases/download/v1.0.0/wav2lip.pth",
+                "path": wav2lip_dir / "wav2lip.pth"
             },
             "s3fd.pth": {
                 "url": "https://www.adrianbulat.com/downloads/python-fan/s3fd-619a316812.pth",
-                "alt_url": "https://github.com/1adrianb/face-alignment/releases/download/v1.0/s3fd-619a316812.pth"
+                "alt_url": "https://github.com/1adrianb/face-alignment/releases/download/v1.0/s3fd-619a316812.pth",
+                "path": wav2lip_dir / "s3fd.pth"
             }
         }
         
         for model_name, urls in models.items():
-            model_path = wav2lip_dir / model_name
-            if not model_path.exists():
+            if not urls["path"].exists():
                 # Try primary URL first, then alternative
-                success = download_file_with_progress(urls["url"], model_path)
+                success = download_file_with_progress(urls["url"], urls["path"])
                 if not success and "alt_url" in urls:
-                    logger.info(f"Trying alternative URL for {model_name}")
-                    download_file_with_progress(urls["alt_url"], model_path)
+                    logger.info(f"🔄 Trying alternative URL for {model_name}")
+                    download_file_with_progress(urls["alt_url"], urls["path"])
             else:
-                logger.info(f"{model_name} already exists")
+                logger.info(f"✅ {model_name} already exists")
         
         logger.info("✅ Wav2Lip models download completed")
+        return True
         
     except Exception as e:
-        logger.error(f"Error downloading Wav2Lip models: {e}")
+        logger.error(f"❌ Error downloading Wav2Lip models: {e}")
+        return False
 
-def download_face_detection_models():
-    """Download face detection and landmark models"""
+def install_dependencies():
+    """Install required Python dependencies"""
     try:
-        logger.info("=== Downloading Face Detection Models ===")
+        logger.info("📦 === Installing Dependencies ===")
         
-        face_dir = Path(MODELS_DIR) / "face_detection"
-        face_dir.mkdir(parents=True, exist_ok=True)
+        # Install SadTalker dependencies
+        sadtalker_dir = Path(MODELS_DIR) / "SadTalker"
+        if sadtalker_dir.exists():
+            requirements_file = sadtalker_dir / "requirements.txt"
+            if requirements_file.exists():
+                logger.info("📦 Installing SadTalker requirements")
+                subprocess.run([
+                    sys.executable, "-m", "pip", "install", "-r", str(requirements_file)
+                ], check=True)
         
-        # Face landmark models
-        models = {
-            "shape_predictor_68_face_landmarks.dat": {
-                "url": "https://github.com/davisking/dlib-models/raw/master/shape_predictor_68_face_landmarks.dat.bz2",
-                "compressed": True
-            },
-            "shape_predictor_5_face_landmarks.dat": {
-                "url": "https://github.com/davisking/dlib-models/raw/master/shape_predictor_5_face_landmarks.dat.bz2", 
-                "compressed": True
-            }
-        }
+        # Install Wav2Lip dependencies
+        wav2lip_dir = Path(MODELS_DIR) / "Wav2Lip"
+        if wav2lip_dir.exists():
+            requirements_file = wav2lip_dir / "requirements.txt"
+            if requirements_file.exists():
+                logger.info("📦 Installing Wav2Lip requirements")
+                subprocess.run([
+                    sys.executable, "-m", "pip", "install", "-r", str(requirements_file)
+                ], check=True)
         
-        for model_name, info in models.items():
-            model_path = face_dir / model_name
-            if not model_path.exists():
-                if info.get("compressed"):
-                    # Download compressed version
-                    compressed_path = face_dir / f"{model_name}.bz2"
-                    success = download_file_with_progress(info["url"], compressed_path)
-                    if success:
-                        # Decompress
-                        import bz2
-                        with bz2.BZ2File(compressed_path, 'rb') as f_in:
-                            with open(model_path, 'wb') as f_out:
-                                shutil.copyfileobj(f_in, f_out)
-                        compressed_path.unlink()  # Remove compressed file
-                        logger.info(f"Decompressed {model_name}")
-                else:
-                    download_file_with_progress(info["url"], model_path)
-            else:
-                logger.info(f"{model_name} already exists")
+        # Install additional dependencies
+        additional_deps = [
+            "face-alignment",
+            "librosa",
+            "soundfile",
+            "resampy",
+            "ffmpeg-python",
+            "imageio-ffmpeg"
+        ]
         
-        logger.info("✅ Face detection models download completed")
+        for dep in additional_deps:
+            try:
+                logger.info(f"📦 Installing {dep}")
+                subprocess.run([
+                    sys.executable, "-m", "pip", "install", dep
+                ], check=True, capture_output=True)
+            except subprocess.CalledProcessError:
+                logger.warning(f"⚠️ Failed to install {dep}")
+        
+        logger.info("✅ Dependencies installation completed")
+        return True
         
     except Exception as e:
-        logger.error(f"Error downloading face detection models: {e}")
-
-def download_additional_models():
-    """Download additional useful models"""
-    try:
-        logger.info("=== Downloading Additional Models ===")
-        
-        # Download face parsing model
-        face_parsing_dir = Path(MODELS_DIR) / "face_parsing"
-        face_parsing_dir.mkdir(parents=True, exist_ok=True)
-        
-        # BiSeNet for face parsing
-        bisenet_model = face_parsing_dir / "79999_iter.pth"
-        if not bisenet_model.exists():
-            bisenet_url = "https://drive.google.com/uc?id=154JgKpzCPW82qINcVieuPH3fZ2e0P812"
-            # Note: Google Drive links need special handling, using alternative
-            alt_url = "https://github.com/zllrunning/face-parsing.PyTorch/releases/download/v1.0/79999_iter.pth"
-            download_file_with_progress(alt_url, bisenet_model)
-        
-        logger.info("✅ Additional models download completed")
-        
-    except Exception as e:
-        logger.error(f"Error downloading additional models: {e}")
+        logger.error(f"❌ Error installing dependencies: {e}")
+        return False
 
 def verify_models():
     """Verify that essential models are downloaded"""
     try:
-        logger.info("=== Verifying Model Downloads ===")
+        logger.info("🔍 === Verifying Model Downloads ===")
         
         essential_models = [
             Path(MODELS_DIR) / "SadTalker" / "checkpoints" / "auido2exp_00300-model.pth",
             Path(MODELS_DIR) / "SadTalker" / "checkpoints" / "epoch_20.pth", 
+            Path(MODELS_DIR) / "SadTalker" / "checkpoints" / "facevid2vid_00189-model.pth.tar",
             Path(MODELS_DIR) / "Wav2Lip" / "wav2lip_gan.pth",
-            Path(MODELS_DIR) / "face_detection" / "shape_predictor_68_face_landmarks.dat"
+            Path(MODELS_DIR) / "Wav2Lip" / "s3fd.pth"
         ]
         
         missing_models = []
         for model_path in essential_models:
             if model_path.exists() and model_path.stat().st_size > 1000:  # At least 1KB
-                logger.info(f"✅ {model_path.name} - OK ({model_path.stat().st_size // (1024*1024)}MB)")
+                size_mb = model_path.stat().st_size // (1024*1024)
+                logger.info(f"✅ {model_path.name} - OK ({size_mb}MB)")
             else:
                 logger.error(f"❌ {model_path.name} - MISSING or CORRUPTED")
                 missing_models.append(model_path.name)
         
         if missing_models:
-            logger.warning(f"Missing models: {missing_models}")
-            logger.warning("Some models failed to download. They will be downloaded at runtime.")
+            logger.warning(f"⚠️ Missing models: {missing_models}")
+            logger.warning("Some models failed to download. Service will use fallbacks.")
+            return False
         else:
             logger.info("✅ All essential models verified successfully!")
+            return True
         
     except Exception as e:
-        logger.error(f"Error verifying models: {e}")
-
-def setup_huggingface_cache():
-    """Setup HuggingFace cache directory"""
-    try:
-        hf_cache_dir = Path(MODELS_DIR) / "huggingface_cache"
-        hf_cache_dir.mkdir(parents=True, exist_ok=True)
-        os.environ['HF_HOME'] = str(hf_cache_dir)
-        logger.info(f"HuggingFace cache set to: {hf_cache_dir}")
-    except Exception as e:
-        logger.error(f"Error setting up HuggingFace cache: {e}")
+        logger.error(f"❌ Error verifying models: {e}")
+        return False
 
 def main():
     """Main download function"""
-    logger.info("🚀 Starting comprehensive model downloads...")
-    logger.info(f"Models directory: {MODELS_DIR}")
+    logger.info("🚀 Starting professional model downloads...")
+    logger.info(f"📁 Models directory: {MODELS_DIR}")
     
     # Create base directory
     Path(MODELS_DIR).mkdir(parents=True, exist_ok=True)
     
-    # Setup caches
-    setup_huggingface_cache()
+    success = True
     
     # Download all models
-    download_face_detection_models()
-    download_wav2lip_models() 
-    download_sadtalker_models()
-    download_additional_models()
+    if not download_sadtalker_models():
+        success = False
+    
+    if not download_wav2lip_models():
+        success = False
+    
+    # Install dependencies
+    if not install_dependencies():
+        success = False
     
     # Verify downloads
-    verify_models()
+    if not verify_models():
+        success = False
     
-    logger.info("🎉 Model download process completed!")
-    logger.info("Note: If any models failed to download, they will be downloaded at runtime")
+    if success:
+        logger.info("🎉 Professional model download completed successfully!")
+    else:
+        logger.warning("⚠️ Model download completed with some issues. Check logs above.")
+    
+    logger.info("📝 Note: Missing models will be handled gracefully with fallbacks at runtime")
 
 if __name__ == "__main__":
     main()
