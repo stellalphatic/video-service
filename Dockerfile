@@ -1,44 +1,52 @@
-# Use a base image with CUDA 11.7. This is necessary for GPU support.
-FROM nvidia/cuda:11.7.1-cudnn8-runtime-ubuntu20.04
+# Use Ubuntu 20.04 with CUDA 11.8
+FROM nvidia/cuda:11.8-cudnn8-devel-ubuntu20.04
 
-# Set DEBIAN_FRONTEND to noninteractive.
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
 
-# Install Python 3.9, the generic pip for Python 3, and other necessary dependencies.
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     python3.9 \
-    python3-pip \
+    python3.9-pip \
+    python3.9-dev \
     git \
     git-lfs \
     ffmpeg \
     libsm6 \
     libxext6 \
-    build-essential \
+    libxrender-dev \
+    libglib2.0-0 \
+    libfontconfig1 \
+    libgl1-mesa-glx \
+    wget \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Set the working directory.
+# Create symbolic links
+RUN ln -s /usr/bin/python3.9 /usr/bin/python
+RUN ln -s /usr/bin/pip3 /usr/bin/pip
+
 WORKDIR /app
 
-# Copy the requirements.txt file.
+# Copy and install requirements
 COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip
+RUN pip install --no-cache-dir -r requirements.txt
 
-# This command will now succeed because the generic python3-pip package is installed,
-# making pip available to the python3.9 interpreter.
-RUN python3.9 -m pip install --no-cache-dir -r requirements.txt \
-    --extra-index-url https://download.pytorch.org/whl/cu117
+# Create directories
+RUN mkdir -p /app/models /app/temp /app/avatars
 
-# Clone the SadTalker repository.
-RUN git clone https://github.com/OpenTalker/SadTalker.git
-
-# Change to the cloned directory to pull large model files.
-WORKDIR /app/SadTalker
-
-# Install git-lfs and pull the large model files.
-RUN git lfs install && git lfs pull
-
-# Copy your application file to the parent directory.
-WORKDIR /app
+# Copy application
 COPY app.py .
 
-# Define the command to run the application using Python 3.9.
-CMD ["python3.9", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+# Set environment variables
+ENV MODELS_DIR=/app/models
+ENV TEMP_DIR=/app/temp
+ENV VIDEO_SERVICE_API_KEY=qwertyuioppoiuytrewq
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["python", "app.py"]

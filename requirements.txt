@@ -1,19 +1,15 @@
-fastapi
-uvicorn
-python-multipart
-websockets
-# SadTalker dependencies
-scipy
-gradio
-imageio-ffmpeg
-einops
-gfpgan
-face-alignment
-torch==1.13.1
-torchaudio==0.13.1
-torchvision==0.14.1
-safetensors
-dlib
-librosa
-scikit-learn==1.3.2
-joblib==1.1.1
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+websockets==12.0
+torch==2.1.0+cu118
+torchvision==0.16.0+cu118
+torchaudio==2.1.0+cu118
+opencv-python==4.8.1.78
+pillow==10.1.0
+numpy==1.24.3
+scipy==1.11.4
+requests==2.31.0
+aiofiles==0.24.0
+python-jose[cryptography]==3.3.0
+--extra-index-url https://download.pytorch.org/whl/cu118
