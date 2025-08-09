@@ -1,5 +1,5 @@
-# Use correct CUDA base image
-FROM nvidia/cuda:11.8-cudnn8-runtime-ubuntu20.04
+# Use a verified CUDA base image that exists
+FROM nvidia/cuda:11.8-runtime-ubuntu20.04
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
@@ -29,8 +29,8 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Create symbolic links for python
-RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.9 1
-RUN update-alternatives --install /usr/bin/pip pip /usr/bin/pip3 1
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.9 1 && \
+    update-alternatives --install /usr/bin/pip pip /usr/bin/pip3 1
 
 # Set working directory
 WORKDIR /app
