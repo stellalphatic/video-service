@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Form, UploadFile, File
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
@@ -25,8 +25,6 @@ from PIL import Image
 import io
 import threading
 from queue import Queue
-import librosa
-import soundfile as sf
 import uuid
 import traceback
 
@@ -36,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 # --- Global Configuration ---
 app = FastAPI(title="Professional Video Generation Service", version="2.0.0")
-executor = ThreadPoolExecutor(max_workers=4)
+executor = ThreadPoolExecutor(max_workers=2)
 video_tasks: Dict[str, dict] = {}
 
 # Model paths and configuration
@@ -48,6 +46,9 @@ API_KEY = os.getenv("VIDEO_SERVICE_API_KEY", "default-key")
 # Create necessary directories
 os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
+os.makedirs("temp/videos", exist_ok=True)
+os.makedirs("temp/errors", exist_ok=True)
+os.makedirs("temp/avatars", exist_ok=True)
 
 logger.info(f"🚀 Professional Video Service Starting")
 logger.info(f"📱 Device: {DEVICE}")
@@ -88,14 +89,14 @@ wav2lip_available = False
 
 # Model paths
 SADTALKER_MODELS = {
-    "audio2exp": "models/SadTalker/checkpoints/auido2exp_00300-model.pth",
-    "facevid2vid": "models/SadTalker/checkpoints/facevid2vid_00189-model.pth.tar",
-    "epoch_20": "models/SadTalker/checkpoints/epoch_20.pth"
+    "audio2exp": f"{MODELS_DIR}/SadTalker/checkpoints/auido2exp_00300-model.pth",
+    "facevid2vid": f"{MODELS_DIR}/SadTalker/checkpoints/facevid2vid_00189-model.pth.tar",
+    "epoch_20": f"{MODELS_DIR}/SadTalker/checkpoints/epoch_20.pth"
 }
 
 WAV2LIP_MODELS = {
-    "wav2lip_gan": "models/Wav2Lip/checkpoints/wav2lip_gan.pth",
-    "s3fd": "models/Wav2Lip/face_detection/detection/sfd/s3fd.pth"
+    "wav2lip_gan": f"{MODELS_DIR}/Wav2Lip/checkpoints/wav2lip_gan.pth",
+    "s3fd": f"{MODELS_DIR}/Wav2Lip/face_detection/detection/sfd/s3fd.pth"
 }
 
 class VideoGenerator:
@@ -277,26 +278,6 @@ async def check_models():
 @app.on_event("startup")
 async def startup_event():
     """Load models on startup"""
-    logger.info("🚀 Starting video service...")
-    
-    # Try to load SadTalker first
-    # sadtalker_loaded = await video_generator.load_sadtalker_models()
-    # if sadtalker_loaded:
-    #     logger.info("✅ SadTalker models loaded successfully")
-    # else:
-    #     logger.warning("⚠️ SadTalker models failed to load")
-    
-    # # Load Wav2Lip as fallback
-    # wav2lip_loaded = await video_generator.load_wav2lip_models()
-    # if wav2lip_loaded:
-    #     logger.info("✅ Wav2Lip models loaded successfully")
-    # else:
-    #     logger.warning("⚠️ Wav2Lip models failed to load")
-    
-    # if not sadtalker_loaded and not wav2lip_loaded:
-    #     logger.error("❌ No video generation models loaded!")
-    
-    # logger.info("✅ Video service startup completed")
     logger.info("🚀 Starting Avatar Video Generation Service...")
     await check_models()
 

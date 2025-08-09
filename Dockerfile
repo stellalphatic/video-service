@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     git \
     wget \
     curl \
+    ffmpeg \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
@@ -19,12 +20,15 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
+# Set environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install Python dependencies with specific versions to avoid conflicts
+# Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy model downloader and run it
@@ -34,12 +38,15 @@ RUN python download_models.py
 # Copy application code
 COPY app.py .
 
+# Create necessary directories
+RUN mkdir -p temp/videos temp/errors temp/avatars
+
 # Expose port
 EXPOSE 8000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=30s --start-period=120s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=30s --start-period=300s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Run the application
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
