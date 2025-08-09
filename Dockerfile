@@ -4,11 +4,10 @@ FROM nvidia/cuda:11.7.1-cudnn8-runtime-ubuntu20.04
 # Set DEBIAN_FRONTEND to noninteractive.
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install Python 3.9 and other necessary dependencies. We also install
-# python3.9-distutils, which is required for pip on some systems.
+# Install Python 3.9, pip for 3.9, and other necessary dependencies.
 RUN apt-get update && apt-get install -y \
     python3.9 \
-    python3.9-distutils \
+    python3.9-pip \
     git \
     git-lfs \
     ffmpeg \
@@ -23,8 +22,8 @@ WORKDIR /app
 # Copy the requirements.txt file.
 COPY requirements.txt .
 
-# This is the key change. We now explicitly use 'python3.9 -m pip' to ensure
-# the installation is done with the correct Python version.
+# This command will now succeed because python3.9-pip is installed.
+# We are explicitly using the Python 3.9 pip.
 RUN python3.9 -m pip install --no-cache-dir -r requirements.txt \
     --extra-index-url https://download.pytorch.org/whl/cu117
 
@@ -41,5 +40,5 @@ RUN git lfs install && git lfs pull
 WORKDIR /app
 COPY app.py .
 
-# Define the command to run the application.
+# Define the command to run the application using Python 3.9.
 CMD ["python3.9", "-m", "uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
