@@ -4,10 +4,10 @@ FROM nvidia/cuda:11.7.1-cudnn8-runtime-ubuntu20.04
 # Set DEBIAN_FRONTEND to noninteractive.
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install Python 3.9, pip for 3.9, and other necessary dependencies.
+# Install Python 3.9, the generic pip for Python 3, and other necessary dependencies.
 RUN apt-get update && apt-get install -y \
     python3.9 \
-    python3.9-pip \
+    python3-pip \
     git \
     git-lfs \
     ffmpeg \
@@ -22,8 +22,8 @@ WORKDIR /app
 # Copy the requirements.txt file.
 COPY requirements.txt .
 
-# This command will now succeed because python3.9-pip is installed.
-# We are explicitly using the Python 3.9 pip.
+# This command will now succeed because the generic python3-pip package is installed,
+# making pip available to the python3.9 interpreter.
 RUN python3.9 -m pip install --no-cache-dir -r requirements.txt \
     --extra-index-url https://download.pytorch.org/whl/cu117
 
