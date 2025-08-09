@@ -47,6 +47,282 @@ if DEVICE == "cuda":
     logger.info(f"CUDA version: {torch.version.cuda}")
     logger.info(f"GPU count: {torch.cuda.device_count()}")
 
+def make_dimensions_even(width: int, height: int) -> tuple:
+    """Make dimensions even (divisible by 2) for H.264 compatibility while preserving aspect ratio"""
+    # Make even by subtracting 1 if odd (minimal change)
+    even_width = width if width % 2 == 0 else width - 1
+    even_height = height if height % 2 == 0 else height - 1
+    return even_width, even_height
+
+def create_animated_talking_video(image_path: str, audio_path: str, output_path: str, quality: str = "high") -> str:
+    """Create animated talking video with lip sync and head movements"""
+    try:
+        logger.info(f"Creating animated talking video: {image_path} + {audio_path} -> {output_path}")
+        
+        # Load and analyze the image
+        img = cv2.imread(image_path)
+        if img is None:
+            raise ValueError(f"Could not load image: {image_path}")
+        
+        original_height, original_width = img.shape[:2]
+        logger.info(f"Original image dimensions: {original_width}x{original_height}")
+        
+        # Make dimensions even while preserving aspect ratio
+        even_width, even_height = make_dimensions_even(original_width, original_height)
+        
+        if even_width != original_width or even_height != original_height:
+            logger.info(f"Adjusting dimensions from {original_width}x{original_height} to {even_width}x{even_height}")
+            img = cv2.resize(img, (even_width, even_height))
+            # Save the adjusted image
+            cv2.imwrite(image_path, img)
+        
+        # Get audio duration and properties
+        result = subprocess.run([
+            'ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1', audio_path
+        ], capture_output=True, text=True)
+        
+        duration = float(result.stdout.strip()) if result.stdout.strip() else 5.0
+        logger.info(f"Audio duration: {duration} seconds")
+        
+        # Create animated frames based on audio
+        temp_frames_dir = tempfile.mkdtemp()
+        frame_rate = 25  # 25 FPS
+        total_frames = int(duration * frame_rate)
+        
+        logger.info(f"Generating {total_frames} animated frames at {frame_rate} FPS")
+        
+        # Analyze audio for animation data
+        audio_analysis = analyze_audio_for_animation(audio_path, frame_rate)
+        
+        # Generate animated frames
+        for frame_idx in range(total_frames):
+            animated_frame = create_animated_frame(
+                img.copy(), 
+                frame_idx, 
+                frame_rate, 
+                audio_analysis.get(frame_idx, 0.0)
+            )
+            
+            frame_path = os.path.join(temp_frames_dir, f"frame_{frame_idx:06d}.jpg")
+            cv2.imwrite(frame_path, animated_frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+        
+        # Create video from animated frames
+        frames_pattern = os.path.join(temp_frames_dir, "frame_%06d.jpg")
+        
+        # FFmpeg command for high-quality animated video
+        if quality == "high":
+            cmd = [
+                'ffmpeg', '-r', str(frame_rate), '-i', frames_pattern,
+                '-i', audio_path,
+                '-c:v', 'libx264', '-preset', 'medium', '-crf', '18',
+                '-c:a', 'aac', '-b:a', '192k',
+                '-pix_fmt', 'yuv420p',
+                '-shortest', '-movflags', '+faststart',
+                output_path, '-y'
+            ]
+        else:
+            cmd = [
+                'ffmpeg', '-r', str(frame_rate), '-i', frames_pattern,
+                '-i', audio_path,
+                '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
+                '-c:a', 'aac', '-b:a', '128k',
+                '-pix_fmt', 'yuv420p',
+                '-shortest', '-movflags', '+faststart',
+                output_path, '-y'
+            ]
+        
+        logger.info(f"Running FFmpeg command: {' '.join(cmd)}")
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        
+        # Cleanup temp frames
+        shutil.rmtree(temp_frames_dir, ignore_errors=True)
+        
+        logger.info(f"Animated talking video created: {output_path}")
+        return output_path
+        
+    except subprocess.CalledProcessError as e:
+        logger.error(f"FFmpeg error: {e.stderr}")
+        raise Exception(f"Video generation failed: {e.stderr}")
+    except Exception as e:
+        logger.error(f"Error creating animated video: {e}")
+        raise
+
+def analyze_audio_for_animation(audio_path: str, frame_rate: int) -> dict:
+    """Analyze audio to extract animation data for each frame"""
+    try:
+        import librosa
+        
+        # Load audio
+        y, sr = librosa.load(audio_path, sr=22050)
+        
+        # Calculate frame duration
+        frame_duration = 1.0 / frame_rate
+        
+        # Extract features for animation
+        animation_data = {}
+        
+        for frame_idx in range(int(len(y) / sr * frame_rate)):
+            start_sample = int(frame_idx * frame_duration * sr)
+            end_sample = int((frame_idx + 1) * frame_duration * sr)
+            
+            if end_sample > len(y):
+                end_sample = len(y)
+            
+            frame_audio = y[start_sample:end_sample]
+            
+            if len(frame_audio) > 0:
+                # Calculate audio intensity (for mouth opening)
+                intensity = np.sqrt(np.mean(frame_audio ** 2))
+                
+                # Calculate spectral features (for mouth shape)
+                if len(frame_audio) > 512:
+                    stft = librosa.stft(frame_audio, n_fft=512)
+                    spectral_centroid = librosa.feature.spectral_centroid(S=np.abs(stft))[0]
+                    avg_centroid = np.mean(spectral_centroid) if len(spectral_centroid) > 0 else 0
+                else:
+                    avg_centroid = 0
+                
+                animation_data[frame_idx] = {
+                    'intensity': intensity,
+                    'spectral_centroid': avg_centroid,
+                    'is_speaking': intensity > 0.01
+                }
+            else:
+                animation_data[frame_idx] = {
+                    'intensity': 0.0,
+                    'spectral_centroid': 0.0,
+                    'is_speaking': False
+                }
+        
+        logger.info(f"Analyzed audio for {len(animation_data)} frames")
+        return animation_data
+        
+    except ImportError:
+        logger.warning("librosa not available, using simple audio analysis")
+        return simple_audio_analysis(audio_path, frame_rate)
+    except Exception as e:
+        logger.error(f"Error analyzing audio: {e}")
+        return simple_audio_analysis(audio_path, frame_rate)
+
+def simple_audio_analysis(audio_path: str, frame_rate: int) -> dict:
+    """Simple audio analysis without librosa"""
+    try:
+        # Get audio duration
+        result = subprocess.run([
+            'ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1', audio_path
+        ], capture_output=True, text=True)
+        
+        duration = float(result.stdout.strip()) if result.stdout.strip() else 5.0
+        total_frames = int(duration * frame_rate)
+        
+        # Create simple animation pattern
+        animation_data = {}
+        for frame_idx in range(total_frames):
+            # Create a speaking pattern (simulate speech)
+            time_sec = frame_idx / frame_rate
+            
+            # Simple sine wave pattern for mouth movement
+            base_intensity = 0.3 + 0.7 * abs(np.sin(time_sec * 8))  # 8 Hz speech-like pattern
+            
+            # Add some randomness
+            noise = np.random.normal(0, 0.1)
+            intensity = max(0, min(1, base_intensity + noise))
+            
+            animation_data[frame_idx] = {
+                'intensity': intensity,
+                'spectral_centroid': 1000 + 500 * intensity,
+                'is_speaking': intensity > 0.2
+            }
+        
+        logger.info(f"Generated simple animation data for {len(animation_data)} frames")
+        return animation_data
+        
+    except Exception as e:
+        logger.error(f"Error in simple audio analysis: {e}")
+        return {}
+
+def create_animated_frame(base_image: np.ndarray, frame_idx: int, frame_rate: int, audio_data: dict) -> np.ndarray:
+    """Create an animated frame with lip sync and subtle movements"""
+    try:
+        img = base_image.copy()
+        height, width = img.shape[:2]
+        
+        # Extract audio features
+        intensity = audio_data.get('intensity', 0.0)
+        is_speaking = audio_data.get('is_speaking', False)
+        spectral_centroid = audio_data.get('spectral_centroid', 0.0)
+        
+        # Time-based animation
+        time_sec = frame_idx / frame_rate
+        
+        # 1. Subtle head movement (breathing/idle animation)
+        head_sway_x = int(2 * np.sin(time_sec * 0.5))  # Slow horizontal sway
+        head_bob_y = int(1 * np.sin(time_sec * 0.3))   # Slow vertical bob
+        
+        # 2. Eye blinking (random blinks)
+        if frame_idx % 180 == 0 or (frame_idx % 90 == 0 and np.random.random() < 0.3):
+            # Add blink effect (darken eye area slightly)
+            eye_region_y = int(height * 0.35)
+            eye_region_height = int(height * 0.1)
+            if eye_region_y + eye_region_height < height:
+                img[eye_region_y:eye_region_y + eye_region_height, :] = \
+                    img[eye_region_y:eye_region_y + eye_region_height, :] * 0.7
+        
+        # 3. Mouth animation based on audio
+        mouth_center_x = width // 2
+        mouth_center_y = int(height * 0.75)  # Assume mouth is at 75% down
+        
+        if is_speaking and intensity > 0.1:
+            # Calculate mouth opening based on audio intensity
+            mouth_width = int(15 + intensity * 25)
+            mouth_height = int(5 + intensity * 15)
+            
+            # Different mouth shapes based on spectral content
+            if spectral_centroid > 1500:  # Higher frequencies - more open mouth
+                mouth_height = int(mouth_height * 1.5)
+            
+            # Draw mouth opening (simple oval)
+            mouth_color = (20, 20, 20)  # Dark mouth interior
+            
+            # Ensure mouth stays within image bounds
+            if (mouth_center_y - mouth_height >= 0 and 
+                mouth_center_y + mouth_height < height and
+                mouth_center_x - mouth_width >= 0 and
+                mouth_center_x + mouth_width < width):
+                
+                cv2.ellipse(img, 
+                           (mouth_center_x, mouth_center_y), 
+                           (mouth_width, mouth_height), 
+                           0, 0, 180, mouth_color, -1)
+                
+                # Add teeth/tongue for realism
+                if mouth_height > 8:
+                    teeth_color = (200, 200, 200)
+                    cv2.ellipse(img, 
+                               (mouth_center_x, mouth_center_y - 2), 
+                               (mouth_width - 3, max(1, mouth_height - 5)), 
+                               0, 0, 180, teeth_color, -1)
+        
+        # 4. Apply subtle head movement
+        if head_sway_x != 0 or head_bob_y != 0:
+            M = np.float32([[1, 0, head_sway_x], [0, 1, head_bob_y]])
+            img = cv2.warpAffine(img, M, (width, height), borderMode=cv2.BORDER_REPLICATE)
+        
+        # 5. Add slight color variation for liveliness (very subtle)
+        if is_speaking:
+            # Slightly warm the face during speaking
+            face_region = img[int(height*0.2):int(height*0.8), int(width*0.2):int(width*0.8)]
+            if face_region.size > 0:
+                face_region[:, :, 2] = np.clip(face_region[:, :, 2] * 1.02, 0, 255)  # Slight red boost
+        
+        return img
+        
+    except Exception as e:
+        logger.error(f"Error creating animated frame {frame_idx}: {e}")
+        return base_image
+
 # --- Model Management Classes ---
 class SadTalkerModel:
     """SadTalker model for high-quality offline video generation"""
@@ -78,49 +354,17 @@ class SadTalkerModel:
             logger.error(f"Error loading SadTalker models: {e}")
             raise
 
-    def generate_video(self, image_path: str, audio_path: str, output_path: str) -> str:
-        """Generate high-quality video using SadTalker"""
+    def generate_video(self, image_path: str, audio_path: str, output_path: str, quality: str = "high") -> str:
+        """Generate high-quality animated video"""
         try:
             logger.info(f"SadTalker generation: {image_path} + {audio_path} -> {output_path}")
-            self._create_high_quality_video(image_path, audio_path, output_path)
-            return output_path
+            
+            # Use our animated video creation function
+            return create_animated_talking_video(image_path, audio_path, output_path, quality)
+            
         except Exception as e:
             logger.error(f"SadTalker generation error: {e}")
             raise
-
-    def _create_high_quality_video(self, image_path: str, audio_path: str, output_path: str):
-        """Create high-quality video with better settings"""
-        try:
-            # Get audio duration
-            result = subprocess.run([
-                'ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
-                '-of', 'default=noprint_wrappers=1:nokey=1', audio_path
-            ], capture_output=True, text=True)
-            
-            duration = float(result.stdout.strip()) if result.stdout.strip() else 5.0
-            
-            # Create high-quality video
-            cmd = [
-                'ffmpeg', '-loop', '1', '-i', image_path,
-                '-i', audio_path,
-                '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
-                '-c:a', 'aac', '-b:a', '192k',
-                '-pix_fmt', 'yuv420p', '-shortest',
-                '-t', str(duration),
-                '-movflags', '+faststart',
-                output_path, '-y'
-            ]
-            
-            subprocess.run(cmd, check=True, capture_output=True)
-            logger.info(f"High-quality video created: {output_path}")
-            
-        except subprocess.CalledProcessError as e:
-            logger.error(f"FFmpeg error: {e.stderr.decode()}")
-            raise
-        except Exception as e:
-            logger.error(f"Error creating high-quality video: {e}")
-            raise
-
 
 class RealtimeVideoModel:
     """Wav2Lip + FOMM model for real-time video generation"""
@@ -165,17 +409,18 @@ class RealtimeVideoModel:
             if img is None:
                 raise ValueError(f"Could not load image: {image_path}")
             
-            # Resize to standard size for real-time processing
-            img_resized = cv2.resize(img, (256, 256))
+            # Keep original aspect ratio but ensure even dimensions
+            height, width = img.shape[:2]
+            even_width, even_height = make_dimensions_even(width, height)
             
-            # Face detection and landmark extraction would go here
-            # For now, we'll use the center for mouth position
+            if even_width != width or even_height != height:
+                img = cv2.resize(img, (even_width, even_height))
             
             preprocessed_data = {
                 "original_image": img,
-                "resized_image": img_resized,
+                "resized_image": img,
                 "image_path": image_path,
-                "mouth_center": (128, 180),  # Estimated mouth position
+                "mouth_center": (even_width // 2, int(even_height * 0.75)),
                 "processed_at": time.time()
             }
             
@@ -252,7 +497,7 @@ class RealTimeStreamManager:
                 mouth_width = int(15 + audio_intensity * 5)
                 
                 # Simple mouth animation (replace with Wav2Lip in production)
-                center = (128, 180)  # Mouth center position
+                center = self.avatar_data["mouth_center"]
                 
                 # Draw mouth based on audio characteristics
                 if audio_intensity > 0.1:  # Speaking threshold
@@ -352,13 +597,13 @@ async def generate_video(request: VideoRequest, background_tasks: BackgroundTask
             # Use SadTalker for high-quality generation
             background_tasks.add_task(
                 _run_sadtalker_generation,
-                task_id, request.image_url, request.audio_url, output_dir
+                task_id, request.image_url, request.audio_url, output_dir, request.quality
             )
         else:
             # Use Wav2Lip+FOMM for faster generation
             background_tasks.add_task(
                 _run_realtime_generation,
-                task_id, request.image_url, request.audio_url, output_dir
+                task_id, request.image_url, request.audio_url, output_dir, request.quality
             )
         
         return JSONResponse({
@@ -521,7 +766,7 @@ async def _stream_frames(websocket: WebSocket, stream_manager: RealTimeStreamMan
         logger.error(f"Error streaming frames: {e}")
 
 # --- Background Task Functions ---
-async def _run_sadtalker_generation(task_id: str, image_url: str, audio_url: str, output_dir: str):
+async def _run_sadtalker_generation(task_id: str, image_url: str, audio_url: str, output_dir: str, quality: str):
     """Run SadTalker generation in background"""
     temp_dir = tempfile.mkdtemp()
     
@@ -535,7 +780,7 @@ async def _run_sadtalker_generation(task_id: str, image_url: str, audio_url: str
         await _download_file(image_url, image_path)
         await _download_file(audio_url, audio_path)
         
-        model.generate_video(image_path, audio_path, output_path)
+        model.generate_video(image_path, audio_path, output_path, quality)
         
         video_tasks[task_id]["status"] = "completed"
         video_tasks[task_id]["output_path"] = output_path
@@ -549,7 +794,7 @@ async def _run_sadtalker_generation(task_id: str, image_url: str, audio_url: str
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-async def _run_realtime_generation(task_id: str, image_url: str, audio_url: str, output_dir: str):
+async def _run_realtime_generation(task_id: str, image_url: str, audio_url: str, output_dir: str, quality: str):
     """Run Wav2Lip generation in background (faster)"""
     temp_dir = tempfile.mkdtemp()
     
@@ -561,7 +806,8 @@ async def _run_realtime_generation(task_id: str, image_url: str, audio_url: str,
         await _download_file(image_url, image_path)
         await _download_file(audio_url, audio_path)
         
-        await _generate_fast_video(image_path, audio_path, output_path)
+        # Use the same animated video creation for fast mode
+        create_animated_talking_video(image_path, audio_path, output_path, quality)
         
         video_tasks[task_id]["status"] = "completed"
         video_tasks[task_id]["output_path"] = output_path
@@ -574,29 +820,6 @@ async def _run_realtime_generation(task_id: str, image_url: str, audio_url: str,
         video_tasks[task_id]["error"] = str(e)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
-
-async def _generate_fast_video(image_path: str, audio_path: str, output_path: str):
-    """Generate video using Wav2Lip"""
-    try:
-        cmd = [
-            'ffmpeg', '-loop', '1', '-i', image_path,
-            '-i', audio_path,
-            '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28',
-            '-c:a', 'aac', '-b:a', '128k',
-            '-pix_fmt', 'yuv420p', '-shortest',
-            '-movflags', '+faststart',
-            output_path, '-y'
-        ]
-        
-        subprocess.run(cmd, check=True, capture_output=True)
-        logger.info(f"Fast video generated: {output_path}")
-        
-    except subprocess.CalledProcessError as e:
-        logger.error(f"FFmpeg error in fast generation: {e.stderr.decode()}")
-        raise
-    except Exception as e:
-        logger.error(f"Error generating fast video: {e}")
-        raise
 
 async def _download_file(url: str, local_path: str):
     """Download file from URL"""
