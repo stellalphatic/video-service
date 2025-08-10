@@ -366,7 +366,7 @@ async def check_models():
     
     models_loaded = True
     
-    logger.info(f"🎭 SadTalker available: {sadtalker_available}")
+    logger.info(f"���� SadTalker available: {sadtalker_available}")
     logger.info(f"👄 Wav2Lip available: {wav2lip_available}")
     
     if not (sadtalker_available or wav2lip_available):
