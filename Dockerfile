@@ -23,6 +23,7 @@ WORKDIR /app
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+ENV PORT=8000
 
 # Copy requirements first for better caching
 COPY requirements.txt .
@@ -31,20 +32,16 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy model downloader and run it
-COPY download_models.py .
-RUN python download_models.py
-
 # Copy application code
 COPY app.py .
 
 # Create necessary directories
-RUN mkdir -p temp/videos temp/errors temp/avatars
+RUN mkdir -p temp/videos temp/errors temp/avatars models
 
 # Expose port
 EXPOSE 8000
 
-# Health check
+# Health check with longer timeout for startup
 HEALTHCHECK --interval=30s --timeout=30s --start-period=300s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
