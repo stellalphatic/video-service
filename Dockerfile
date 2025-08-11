@@ -11,10 +11,10 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
+    libx11-dev \
     libgomp1 \
     libgoogle-perftools4 \
     libtcmalloc-minimal4 \
-    libx11-dev \
     libgtk-3-dev \
     libboost-python-dev \
     libboost-thread-dev \
