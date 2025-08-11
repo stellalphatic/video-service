@@ -73,7 +73,7 @@ def download_sadtalker_models():
     # Create checkpoints directory
     os.makedirs(checkpoints_dir, exist_ok=True)
     
-    # SadTalker model URLs - multiple sources for reliability
+    # SadTalker model URLs- multiple sources for reliability
     models = {
         "auido2exp_00300-model.pth": [
             "https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/auido2exp_00300-model.pth",
