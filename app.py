@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Form, UploadFile, File
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Form, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
@@ -9,9 +9,8 @@ import aiofiles
 from pathlib import Path
 import tempfile
 import shutil
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Optional, Dict, Any, List
 import json
-import base64
 import time
 import subprocess
 import sys
@@ -26,15 +25,17 @@ import threading
 from queue import Queue
 import uuid
 import traceback
+import base64
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # --- Global Configuration ---
-app = FastAPI(title="Professional Video Generation Service", version="3.0.0")
-executor = ThreadPoolExecutor(max_workers=4)
+app = FastAPI(title="Professional Avatar Video Service", version="4.0.0")
+executor = ThreadPoolExecutor(max_workers=6)
 video_tasks: Dict[str, dict] = {}
+active_streams: Dict[str, dict] = {}
 
 # Model paths and configuration
 MODELS_DIR = os.environ.get("MODELS_DIR", "/app/models")
@@ -46,10 +47,11 @@ API_KEY = os.getenv("VIDEO_SERVICE_API_KEY", "default-key")
 os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs("temp/videos", exist_ok=True)
+os.makedirs("temp/streams", exist_ok=True)
 os.makedirs("temp/errors", exist_ok=True)
 os.makedirs("temp/avatars", exist_ok=True)
 
-logger.info(f"🚀 Professional Video Service Starting")
+logger.info(f"🚀 Professional Avatar Video Service Starting")
 logger.info(f"📱 Device: {DEVICE}")
 logger.info(f"📁 Models Directory: {MODELS_DIR}")
 logger.info(f"🔧 Temp Directory: {TEMP_DIR}")
@@ -78,7 +80,6 @@ sadtalker_models = {}
 wav2lip_models = {}
 realtime_models = {}
 preprocessed_avatars = {}
-active_streams = {}
 
 # Global variables for model loading
 models_loaded = False
@@ -96,19 +97,21 @@ SADTALKER_MODELS = {
 
 WAV2LIP_MODELS = {
     "wav2lip_gan": f"{MODELS_DIR}/Wav2Lip/checkpoints/wav2lip_gan.pth",
-    "s3fd": f"{MODELS_DIR}/Wav2Lip/checkpoints/s3fd.pth",
+    "s3fd": f"{MODELS_DIR}/Wav2Lip/face_detection/detection/sfd/s3fd.pth",
     "wav2lip": f"{MODELS_DIR}/Wav2Lip/checkpoints/wav2lip.pth"
 }
 
 class VideoGenerator:
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        logger.info(f"Using device: {self.device}")
+        self.sadtalker_model = None
+        self.wav2lip_model = None
+        logger.info(f"VideoGenerator initialized on device: {self.device}")
         
     async def load_sadtalker_models(self):
         """Load SadTalker models"""
         try:
-            logger.info("🎭 Checking SadTalker models...")
+            logger.info("🎭 Loading SadTalker models...")
             
             sadtalker_path = os.path.join(MODELS_DIR, "SadTalker")
             if not os.path.exists(sadtalker_path):
@@ -116,16 +119,33 @@ class VideoGenerator:
                 return False
                 
             # Add SadTalker to Python path
-            sys.path.insert(0, sadtalker_path)
+            if sadtalker_path not in sys.path:
+                sys.path.insert(0, sadtalker_path)
             
             # Check if all model files exist
-            all_exist = all(os.path.exists(path) for path in SADTALKER_MODELS.values())
-            if not all_exist:
-                logger.error("❌ Some SadTalker model files are missing")
+            missing_models = []
+            for name, path in SADTALKER_MODELS.items():
+                if not os.path.exists(path):
+                    missing_models.append(f"{name}: {path}")
+            
+            if missing_models:
+                logger.error(f"❌ Missing SadTalker model files: {missing_models}")
                 return False
             
-            logger.info("✅ SadTalker models available")
-            return True
+            # Try to import SadTalker modules
+            try:
+                from src.utils.preprocess import CropAndExtract
+                from src.test_audio2coeff import Audio2Coeff  
+                from src.facerender.animate import AnimateFromCoeff
+                from src.generate_batch import get_data
+                from src.generate_facerender_batch import get_facerender_data
+                
+                logger.info("✅ SadTalker modules imported successfully")
+                return True
+                
+            except ImportError as e:
+                logger.error(f"❌ Failed to import SadTalker modules: {e}")
+                return False
             
         except Exception as e:
             logger.error(f"❌ Failed to load SadTalker models: {e}")
@@ -134,26 +154,56 @@ class VideoGenerator:
     async def load_wav2lip_models(self):
         """Load Wav2Lip models"""
         try:
-            logger.info("🎤 Checking Wav2Lip models...")
+            logger.info("🎤 Loading Wav2Lip models...")
             
             wav2lip_path = os.path.join(MODELS_DIR, "Wav2Lip")
             if not os.path.exists(wav2lip_path):
                 logger.error("❌ Wav2Lip repository not found")
                 return False
             
+            # Add Wav2Lip to Python path
+            if wav2lip_path not in sys.path:
+                sys.path.insert(0, wav2lip_path)
+            
             # Check if all model files exist
-            all_exist = all(os.path.exists(path) for path in WAV2LIP_MODELS.values())
-            if not all_exist:
-                logger.error("❌ Some Wav2Lip model files are missing")
+            missing_models = []
+            for name, path in WAV2LIP_MODELS.items():
+                if not os.path.exists(path):
+                    missing_models.append(f"{name}: {path}")
+            
+            if missing_models:
+                logger.error(f"❌ Missing Wav2Lip model files: {missing_models}")
                 return False
             
-            logger.info("✅ Wav2Lip models available")
-            return True
+            # Try to import and load Wav2Lip model
+            try:
+                from models import Wav2Lip
+                import face_detection
+                
+                # Load the model
+                model_path = WAV2LIP_MODELS["wav2lip_gan"]
+                checkpoint = torch.load(model_path, map_location=self.device)
+                
+                model = Wav2Lip()
+                s = checkpoint["state_dict"]
+                new_s = {}
+                for k, v in s.items():
+                    new_s[k.replace('module.', '')] = v
+                model.load_state_dict(new_s)
+                
+                self.wav2lip_model = model.to(self.device).eval()
+                
+                logger.info("✅ Wav2Lip model loaded successfully")
+                return True
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to load Wav2Lip model: {e}")
+                return False
             
         except Exception as e:
             logger.error(f"❌ Failed to load Wav2Lip models: {e}")
             return False
-    
+
     async def generate_video_sadtalker(self, image_path: str, audio_path: str, output_path: str, quality: str = "high") -> bool:
         """Generate video using SadTalker"""
         try:
@@ -164,19 +214,23 @@ class VideoGenerator:
                 logger.error("❌ SadTalker not found")
                 return False
             
-            # SadTalker inference command
+            # Prepare arguments for SadTalker
+            result_dir = str(Path(output_path).parent)
+            
+            # SadTalker inference command with proper arguments
             cmd = [
-                "python", os.path.join(sadtalker_path, "inference.py"),
+                sys.executable, os.path.join(sadtalker_path, "inference.py"),
                 "--driven_audio", audio_path,
                 "--source_image", image_path,
-                "--result_dir", str(Path(output_path).parent),
+                "--result_dir", result_dir,
                 "--still",
                 "--preprocess", "crop" if quality == "high" else "resize",
                 "--size", "512" if quality == "high" else "256",
                 "--pose_style", "0",
                 "--expression_scale", "1.0",
                 "--facerender", "facevid2vid",
-                "--batch_size", "2" if quality == "high" else "4"
+                "--batch_size", "2" if quality == "high" else "4",
+                "--enhancer", "gfpgan" if quality == "high" else "RestoreFormer"
             ]
             
             if DEVICE == "cpu":
@@ -184,15 +238,27 @@ class VideoGenerator:
             
             logger.info(f"🚀 Running SadTalker: {' '.join(cmd)}")
             
-            result = subprocess.run(cmd, capture_output=True, text=True, cwd=sadtalker_path, timeout=300)
+            # Set environment variables
+            env = os.environ.copy()
+            env['PYTHONPATH'] = sadtalker_path + ':' + env.get('PYTHONPATH', '')
+            
+            result = subprocess.run(
+                cmd, 
+                capture_output=True, 
+                text=True, 
+                cwd=sadtalker_path, 
+                timeout=600,  # 10 minutes timeout
+                env=env
+            )
             
             if result.returncode != 0:
                 logger.error(f"❌ SadTalker failed: {result.stderr}")
+                logger.error(f"❌ SadTalker stdout: {result.stdout}")
                 return False
             
             # Find generated video file
-            result_dir = Path(output_path).parent
-            generated_files = list(result_dir.glob("*.mp4"))
+            result_dir_path = Path(result_dir)
+            generated_files = list(result_dir_path.glob("*.mp4"))
             
             if not generated_files:
                 logger.error("❌ No video file generated by SadTalker")
@@ -209,6 +275,7 @@ class VideoGenerator:
             return False
         except Exception as e:
             logger.error(f"❌ SadTalker generation error: {e}")
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
             return False
     
     async def generate_video_wav2lip(self, image_path: str, audio_path: str, output_path: str, quality: str = "fast") -> bool:
@@ -221,16 +288,18 @@ class VideoGenerator:
                 logger.error("❌ Wav2Lip not found")
                 return False
             
-            # Wav2Lip inference
-            model_path = os.path.join(wav2lip_path, "checkpoints", "wav2lip_gan.pth")
+            # Wav2Lip inference command
+            model_path = WAV2LIP_MODELS["wav2lip_gan"]
             cmd = [
-                "python", os.path.join(wav2lip_path, "inference.py"),
+                sys.executable, os.path.join(wav2lip_path, "inference.py"),
                 "--checkpoint_path", model_path,
                 "--face", image_path,
                 "--audio", audio_path,
                 "--outfile", output_path,
                 "--fps", "25",
-                "--pads", "0", "10", "0", "0"
+                "--pads", "0", "10", "0", "0",
+                "--face_det_batch_size", "4",
+                "--wav2lip_batch_size", "8" if quality == "fast" else "4"
             ]
             
             if quality == "fast":
@@ -238,10 +307,22 @@ class VideoGenerator:
             
             logger.info(f"🚀 Running Wav2Lip: {' '.join(cmd)}")
             
-            result = subprocess.run(cmd, capture_output=True, text=True, cwd=wav2lip_path, timeout=180)
+            # Set environment variables
+            env = os.environ.copy()
+            env['PYTHONPATH'] = wav2lip_path + ':' + env.get('PYTHONPATH', '')
+            
+            result = subprocess.run(
+                cmd, 
+                capture_output=True, 
+                text=True, 
+                cwd=wav2lip_path, 
+                timeout=300,  # 5 minutes timeout
+                env=env
+            )
             
             if result.returncode != 0:
                 logger.error(f"❌ Wav2Lip failed: {result.stderr}")
+                logger.error(f"❌ Wav2Lip stdout: {result.stdout}")
                 return False
             
             logger.info(f"✅ Wav2Lip generation completed: {output_path}")
@@ -252,6 +333,7 @@ class VideoGenerator:
             return False
         except Exception as e:
             logger.error(f"❌ Wav2Lip generation error: {e}")
+            logger.error(f"❌ Traceback: {traceback.format_exc()}")
             return False
 
     def create_basic_video_with_audio(self, image_path: str, audio_path: str, output_path: str) -> bool:
@@ -333,7 +415,7 @@ async def check_models():
 @app.on_event("startup")
 async def startup_event():
     """Load models on startup"""
-    logger.info("🚀 Starting Avatar Video Generation Service...")
+    logger.info("🚀 Starting Professional Avatar Video Service...")
     await check_models()
 
 # Initialize MediaPipe Face Detection (lighter alternative to dlib)
