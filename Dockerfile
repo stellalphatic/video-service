@@ -15,6 +15,12 @@ RUN apt-get update && apt-get install -y \
     libgomp1 \
     libgoogle-perftools4 \
     libtcmalloc-minimal4 \
+    libx11-dev \
+    libgtk-3-dev \
+    libboost-python-dev \
+    libboost-thread-dev \
+    libopenblas-dev \
+    liblapack-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
