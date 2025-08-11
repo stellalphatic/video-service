@@ -60,10 +60,9 @@ if DEVICE == "cuda":
     if torch.cuda.device_count() > 0:
         logger.info(f"🎪 GPU 0: {torch.cuda.get_device_name(0)}")
 
-# Global model instances
-sadtalker_model = None
-wav2lip_model = None
-face_detection_model = None
+# Check if models are downloaded
+models_downloaded = os.path.exists(f"{MODELS_DIR}/.models_downloaded")
+logger.info(f"📦 Models downloaded: {models_downloaded}")
 
 # CORS middleware
 app.add_middleware(
@@ -109,102 +108,51 @@ class VideoGenerator:
     async def load_sadtalker_models(self):
         """Load SadTalker models"""
         try:
-            logger.info("🎭 Loading SadTalker models...")
+            logger.info("🎭 Checking SadTalker models...")
             
-            # Clone SadTalker repository if not exists
             sadtalker_path = os.path.join(MODELS_DIR, "SadTalker")
             if not os.path.exists(sadtalker_path):
-                logger.info("📥 Cloning SadTalker repository...")
-                subprocess.run([
-                    "git", "clone", "https://github.com/OpenTalker/SadTalker.git", sadtalker_path
-                ], check=True)
+                logger.error("❌ SadTalker repository not found")
+                return False
                 
             # Add SadTalker to Python path
             sys.path.insert(0, sadtalker_path)
             
-            # Download models if they don't exist
-            await self._download_sadtalker_models()
+            # Check if all model files exist
+            all_exist = all(os.path.exists(path) for path in SADTALKER_MODELS.values())
+            if not all_exist:
+                logger.error("❌ Some SadTalker model files are missing")
+                return False
             
-            logger.info("✅ SadTalker models loaded successfully")
+            logger.info("✅ SadTalker models available")
             return True
             
         except Exception as e:
             logger.error(f"❌ Failed to load SadTalker models: {e}")
             return False
     
-    async def _download_sadtalker_models(self):
-        """Download SadTalker model files"""
-        model_urls = {
-            "auido2exp_00300-model.pth": "https://huggingface.co/vinthony/SadTalker/resolve/main/auido2exp_00300-model.pth",
-            "facevid2vid_00189-model.pth.tar": "https://huggingface.co/vinthony/SadTalker/resolve/main/facevid2vid_00189-model.pth.tar",
-            "epoch_20.pth": "https://huggingface.co/vinthony/SadTalker/resolve/main/epoch_20.pth",
-            "auido2pose_00140-model.pth": "https://huggingface.co/vinthony/SadTalker/resolve/main/auido2pose_00140-model.pth",
-            "shape_predictor_68_face_landmarks.dat": "https://huggingface.co/vinthony/SadTalker/resolve/main/shape_predictor_68_face_landmarks.dat"
-        }
-        
-        checkpoints_dir = os.path.join(MODELS_DIR, "SadTalker", "checkpoints")
-        os.makedirs(checkpoints_dir, exist_ok=True)
-        
-        for filename, url in model_urls.items():
-            file_path = os.path.join(checkpoints_dir, filename)
-            if not os.path.exists(file_path):
-                logger.info(f"📥 Downloading {filename}...")
-                await self._download_file(url, file_path)
-    
     async def load_wav2lip_models(self):
         """Load Wav2Lip models"""
         try:
-            logger.info("🎤 Loading Wav2Lip models...")
+            logger.info("🎤 Checking Wav2Lip models...")
             
-            # Clone Wav2Lip repository if not exists
             wav2lip_path = os.path.join(MODELS_DIR, "Wav2Lip")
             if not os.path.exists(wav2lip_path):
-                logger.info("📥 Cloning Wav2Lip repository...")
-                subprocess.run([
-                    "git", "clone", "https://github.com/Rudrabha/Wav2Lip.git", wav2lip_path
-                ], check=True)
+                logger.error("❌ Wav2Lip repository not found")
+                return False
             
-            # Download models if they don't exist
-            await self._download_wav2lip_models()
+            # Check if all model files exist
+            all_exist = all(os.path.exists(path) for path in WAV2LIP_MODELS.values())
+            if not all_exist:
+                logger.error("❌ Some Wav2Lip model files are missing")
+                return False
             
-            logger.info("✅ Wav2Lip models loaded successfully")
+            logger.info("✅ Wav2Lip models available")
             return True
             
         except Exception as e:
             logger.error(f"❌ Failed to load Wav2Lip models: {e}")
             return False
-    
-    async def _download_wav2lip_models(self):
-        """Download Wav2Lip model files"""
-        model_urls = {
-            "wav2lip_gan.pth": "https://huggingface.co/camenduru/Wav2Lip/resolve/main/checkpoints/wav2lip_gan.pth",
-            "s3fd.pth": "https://huggingface.co/camenduru/Wav2Lip/resolve/main/checkpoints/s3fd-619a316812.pth",
-            "wav2lip.pth": "https://huggingface.co/camenduru/Wav2Lip/resolve/main/checkpoints/wav2lip.pth"
-        }
-        
-        checkpoints_dir = os.path.join(MODELS_DIR, "Wav2Lip", "checkpoints")
-        os.makedirs(checkpoints_dir, exist_ok=True)
-        
-        for filename, url in model_urls.items():
-            file_path = os.path.join(checkpoints_dir, filename)
-            if not os.path.exists(file_path):
-                logger.info(f"📥 Downloading {filename}...")
-                await self._download_file(url, file_path)
-    
-    async def _download_file(self, url: str, file_path: str):
-        """Download a file from URL"""
-        try:
-            response = requests.get(url, stream=True)
-            response.raise_for_status()
-            
-            with open(file_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            
-            logger.info(f"✅ Downloaded {os.path.basename(file_path)}")
-        except Exception as e:
-            logger.error(f"❌ Failed to download {url}: {e}")
-            raise
     
     async def generate_video_sadtalker(self, image_path: str, audio_path: str, output_path: str, quality: str = "high") -> bool:
         """Generate video using SadTalker"""
@@ -360,13 +308,21 @@ async def check_models():
     """Check which models are available."""
     global sadtalker_available, wav2lip_available, models_loaded
     
+    # Only check if models were downloaded during build
+    if not models_downloaded:
+        logger.warning("⚠️ Models not downloaded during build, using basic generation only")
+        sadtalker_available = False
+        wav2lip_available = False
+        models_loaded = True
+        return
+    
     # Try to load models
     sadtalker_available = await video_generator.load_sadtalker_models()
     wav2lip_available = await video_generator.load_wav2lip_models()
     
     models_loaded = True
     
-    logger.info(f"���� SadTalker available: {sadtalker_available}")
+    logger.info(f"🎭 SadTalker available: {sadtalker_available}")
     logger.info(f"👄 Wav2Lip available: {wav2lip_available}")
     
     if not (sadtalker_available or wav2lip_available):
@@ -533,10 +489,7 @@ def create_animated_talking_video(image_path: str, audio_path: str, output_path:
                 output_path, '-y'
             ]
         
-        logger.info(f"Running FFmpeg command: {' '.join(cmd)}")
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        
-        # Cleanup temp frames
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
         shutil.rmtree(temp_frames_dir, ignore_errors=True)
         
         logger.info(f"Animated talking video created successfully: {output_path}")
@@ -816,171 +769,6 @@ def simple_audio_analysis(audio_path: str, frame_rate: int) -> dict:
         logger.error(f"Error in simple audio analysis: {e}")
         return {}
 
-# --- Real-time Video Streaming Classes ---
-class RealtimeVideoStreamer:
-    """Real-time video streaming with proper lip sync"""
-    
-    def __init__(self, avatar_id: str, image_path: str):
-        self.avatar_id = avatar_id
-        self.image_path = image_path
-        self.base_image = None
-        self.is_speaking = False
-        self.frame_queue = asyncio.Queue(maxsize=5)
-        self.audio_queue = Queue(maxsize=10)
-        self.current_frame = None
-        self.frame_count = 0
-        
-        # Load and preprocess image
-        self.load_image()
-        
-        # Start frame generation thread
-        self.frame_thread = threading.Thread(target=self._frame_generation_loop, daemon=True)
-        self.frame_thread.start()
-        
-        logger.info(f"🎥 Real-time streamer initialized for avatar {avatar_id}")
-    
-    def load_image(self):
-        """Load and preprocess the avatar image"""
-        try:
-            self.base_image = cv2.imread(self.image_path)
-            if self.base_image is None:
-                raise ValueError(f"Could not load image: {self.image_path}")
-            
-            # Resize to standard size
-            self.base_image = cv2.resize(self.base_image, (512, 512))
-            
-            # Generate idle frame
-            _, buffer = cv2.imencode('.jpg', self.base_image, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            self.current_frame = buffer.tobytes()
-            
-            logger.info(f"✅ Avatar image loaded and preprocessed: {self.image_path}")
-            
-        except Exception as e:
-            logger.error(f"❌ Error loading avatar image: {e}")
-            raise
-    
-    def add_audio_chunk(self, audio_data: bytes):
-        """Add audio chunk for lip sync"""
-        try:
-            if not self.audio_queue.full():
-                self.audio_queue.put(audio_data)
-                self.is_speaking = True
-        except Exception as e:
-            logger.error(f"❌ Error adding audio chunk: {e}")
-    
-    def _frame_generation_loop(self):
-        """Background thread for frame generation"""
-        while True:
-            try:
-                # Get audio data if available
-                audio_data = None
-                if not self.audio_queue.empty():
-                    audio_data = self.audio_queue.get_nowait()
-                
-                # Generate frame
-                if audio_data:
-                    frame = self._generate_speaking_frame(audio_data)
-                else:
-                    frame = self._generate_idle_frame()
-                    self.is_speaking = False
-                
-                # Update current frame
-                if frame:
-                    self.current_frame = frame
-                
-                # Control frame rate (25 FPS)
-                time.sleep(0.04)
-                
-            except Exception as e:
-                logger.error(f"❌ Error in frame generation loop: {e}")
-                time.sleep(0.1)
-    
-    def _generate_speaking_frame(self, audio_data: bytes) -> bytes:
-        """Generate frame with lip sync animation"""
-        try:
-            img = self.base_image.copy()
-            
-            # Analyze audio
-            audio_array = np.frombuffer(audio_data, dtype=np.int16)
-            if len(audio_array) > 0:
-                # Calculate audio intensity
-                intensity = np.abs(audio_array).mean() / 32767.0
-                
-                # Simple lip sync animation
-                if intensity > 0.1:
-                    # Mouth center (approximate)
-                    mouth_center = (256, 380)
-                    
-                    # Mouth opening based on audio intensity
-                    mouth_width = int(20 + intensity * 25)
-                    mouth_height = int(5 + intensity * 15)
-                    
-                    # Draw mouth opening
-                    cv2.ellipse(img, mouth_center, (mouth_width, mouth_height), 0, 0, 180, (20, 20, 20), -1)
-                    
-                    # Add subtle head movement
-                    if intensity > 0.3:
-                        shift_x = int(np.sin(self.frame_count * 0.1) * intensity * 3)
-                        shift_y = int(np.cos(self.frame_count * 0.15) * intensity * 2)
-                        
-                        M = np.float32([[1, 0, shift_x], [0, 1, shift_y]])
-                        img = cv2.warpAffine(img, M, (img.shape[1], img.shape[0]))
-            
-            self.frame_count += 1
-            
-            # Encode frame
-            _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            return buffer.tobytes()
-            
-        except Exception as e:
-            logger.error(f"❌ Error generating speaking frame: {e}")
-            return self.current_frame
-    
-    def _generate_idle_frame(self) -> bytes:
-        """Generate idle frame with subtle animation"""
-        try:
-            img = self.base_image.copy()
-            
-            # Subtle breathing effect
-            scale = 1.0 + 0.01 * np.sin(self.frame_count * 0.05)
-            height, width = img.shape[:2]
-            
-            # Slight scale change for breathing
-            new_width = int(width * scale)
-            new_height = int(height * scale)
-            
-            if new_width != width or new_height != height:
-                img = cv2.resize(img, (new_width, new_height))
-                
-                # Center the image
-                if new_width > width or new_height > height:
-                    # Crop to original size
-                    start_x = (new_width - width) // 2
-                    start_y = (new_height - height) // 2
-                    img = img[start_y:start_y+height, start_x:start_x+width]
-                else:
-                    # Pad to original size
-                    pad_x = (width - new_width) // 2
-                    pad_y = (height - new_height) // 2
-                    img = cv2.copyMakeBorder(img, pad_y, pad_y, pad_x, pad_x, cv2.BORDER_REPLICATE)
-            
-            self.frame_count += 1
-            
-            # Encode frame
-            _, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 85])
-            return buffer.tobytes()
-            
-        except Exception as e:
-            logger.error(f"❌ Error generating idle frame: {e}")
-            return self.current_frame
-    
-    async def get_frame(self) -> bytes:
-        """Get current frame"""
-        return self.current_frame if self.current_frame else b""
-
-# Global streamers
-active_streamers: Dict[str, RealtimeVideoStreamer] = {}
-
 # --- Background Task Functions ---
 async def _run_video_generation(task_id: str, image_url: str, audio_url: str, output_dir: str, quality: str):
     """Run video generation in background"""
@@ -991,7 +779,7 @@ async def _run_video_generation(task_id: str, image_url: str, audio_url: str, ou
         
         image_path = os.path.join(temp_dir, "input.jpg")
         audio_path = os.path.join(temp_dir, "input.wav")
-        output_path = os.path.join(output_dir, "output.mp4")
+        output_path = os.path.join(output_dir, f"{task_id}.mp4")
         
         # Download files
         logger.info(f"📥 Downloading files for task {task_id}")
@@ -1046,6 +834,15 @@ async def _run_video_generation(task_id: str, image_url: str, audio_url: str, ou
         logger.error(f"❌ Video generation failed for task {task_id}: {e}")
         video_tasks[task_id]["status"] = "failed"
         video_tasks[task_id]["error"] = str(e)
+        
+        # Save error to file
+        error_path = f"temp/errors/{task_id}.json"
+        try:
+            with open(error_path, 'w') as f:
+                json.dump({"error": str(e), "task_id": task_id}, f)
+        except Exception as save_error:
+            logger.error(f"Failed to save error file: {save_error}")
+            
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -1120,15 +917,10 @@ async def get_video_status(task_id: str):
     
     if os.path.exists(video_path):
         # Return the video file
-        async def generate():
-            async with aiofiles.open(video_path, 'rb') as f:
-                while chunk := await f.read(8192):
-                    yield chunk
-        
-        return StreamingResponse(
-            generate(),
+        return FileResponse(
+            video_path,
             media_type="video/mp4",
-            headers={"Content-Disposition": f"attachment; filename={task_id}.mp4"}
+            filename=f"{task_id}.mp4"
         )
     else:
         # Check for error file
@@ -1152,82 +944,6 @@ async def get_video_status(task_id: str):
             }
         else:
             return {"status": "not_found"}
-
-@app.post("/preprocess-avatar")
-async def preprocess_avatar(
-    avatar_id: str = Form(...),
-    image_url: str = Form(...)
-):
-    """Preprocess avatar for real-time video generation."""
-    try:
-        # Create avatar directory
-        avatar_dir = f"temp/avatars/{avatar_id}"
-        os.makedirs(avatar_dir, exist_ok=True)
-        
-        # Download and preprocess image
-        response = requests.get(image_url)
-        response.raise_for_status()
-        
-        image_path = f"{avatar_dir}/image.jpg"
-        with open(image_path, 'wb') as f:
-            f.write(response.content)
-        
-        # Initialize real-time streamer
-        if avatar_id not in active_streamers:
-            active_streamers[avatar_id] = RealtimeVideoStreamer(avatar_id, image_path)
-        
-        return {
-            "status": "success",
-            "avatar_id": avatar_id,
-            "preprocessed": True,
-            "streaming_ready": True
-        }
-    
-    except Exception as e:
-        logger.error(f"Error preprocessing avatar {avatar_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Preprocessing failed: {str(e)}")
-
-@app.get("/stream-frame/{avatar_id}")
-async def stream_frame(avatar_id: str):
-    """Get current frame for real-time streaming"""
-    try:
-        if avatar_id not in active_streamers:
-            raise HTTPException(status_code=404, detail="Avatar not found or not preprocessed")
-        
-        streamer = active_streamers[avatar_id]
-        frame_data = await streamer.get_frame()
-        
-        return StreamingResponse(
-            io.BytesIO(frame_data),
-            media_type="image/jpeg"
-        )
-    
-    except Exception as e:
-        logger.error(f"Error streaming frame for avatar {avatar_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Streaming failed: {str(e)}")
-
-@app.post("/add-audio-chunk/{avatar_id}")
-async def add_audio_chunk(
-    avatar_id: str,
-    audio_file: UploadFile = File(...)
-):
-    """Add audio chunk for real-time lip sync"""
-    try:
-        if avatar_id not in active_streamers:
-            raise HTTPException(status_code=404, detail="Avatar not found or not preprocessed")
-        
-        streamer = active_streamers[avatar_id]
-        audio_data = await audio_file.read()
-        streamer.add_audio_chunk(audio_data)
-        
-        return {
-            "status": "success",
-            "message": "Audio chunk added for lip sync"
-        }
-    
-    except Exception as e:
-        logger.error(f"Error adding audio chunk for avatar {avatar_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Audio processing failed: {str(e)}")
 
 @app.get("/models/status")
 async def models_status():
@@ -1269,7 +985,7 @@ async def health_check():
         "version": "3.0.0",
         "device": DEVICE,
         "cuda_available": torch.cuda.is_available(),
-        "active_streams": len(active_streamers),
+        "active_streams": len(active_streams),
         "active_tasks": len([t for t in video_tasks.values() if t["status"] == "processing"]),
         "total_tasks": len(video_tasks),
         "features": {
@@ -1307,9 +1023,6 @@ async def root():
         "endpoints": {
             "generate_video": "/generate-video",
             "video_status": "/video-status/{task_id}",
-            "preprocess_avatar": "/preprocess-avatar",
-            "stream_frame": "/stream-frame/{avatar_id}",
-            "add_audio_chunk": "/add-audio-chunk/{avatar_id}",
             "models_status": "/models/status",
             "health": "/health"
         }

@@ -4,6 +4,9 @@ import logging
 from pathlib import Path
 import hashlib
 import subprocess
+import sys
+import time
+import shutil
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -148,6 +151,8 @@ def clone_repositories():
                 sadtalker_path
             ], check=True, capture_output=True)
             logger.info("✅ SadTalker repository cloned")
+        else:
+            logger.info("✅ SadTalker repository already exists")
         
         # Clone Wav2Lip
         wav2lip_path = "models/Wav2Lip"
@@ -159,15 +164,32 @@ def clone_repositories():
                 wav2lip_path
             ], check=True, capture_output=True)
             logger.info("✅ Wav2Lip repository cloned")
+        else:
+            logger.info("✅ Wav2Lip repository already exists")
         
         return True
     except Exception as e:
         logger.error(f"❌ Error cloning repositories: {e}")
         return False
 
+def create_model_status_file():
+    """Create a status file to indicate models are downloaded."""
+    try:
+        status_file = "models/.models_downloaded"
+        with open(status_file, 'w') as f:
+            f.write(f"Models downloaded at: {time.time()}\n")
+        logger.info("✅ Created model status file")
+    except Exception as e:
+        logger.error(f"❌ Failed to create status file: {e}")
+
 def main():
     """Download all required models."""
     logger.info("🚀 === Starting Model Download Process ===")
+    
+    # Check if models are already downloaded
+    if os.path.exists("models/.models_downloaded"):
+        logger.info("✅ Models already downloaded, skipping...")
+        return
     
     # Clone repositories first
     if not clone_repositories():
@@ -222,16 +244,19 @@ def main():
             else:
                 logger.error(f"❌ {model_name} - {status}")
     
+    # Create status file if successful
+    if success_count >= 3:  # At least some essential models
+        create_model_status_file()
+        logger.info("🎉 Essential models downloaded successfully!")
+    else:
+        logger.warning(f"⚠️ Model download completed with issues. Check logs above.")
+    
     # Summary
     if failed_models:
         logger.warning(f"⚠️ Missing models: {failed_models}")
         logger.warning("Some models failed to download. Service will use fallbacks.")
     
-    if success_count >= 3:  # At least some essential models
-        logger.info("🎉 Essential models downloaded successfully!")
-    else:
-        logger.warning(f"⚠️ Model download completed with issues. Check logs above.")
-        logger.info("📝 Note: Missing models will be handled gracefully with fallbacks at runtime")
+    logger.info(f"📊 Download Summary: {success_count}/{total_count} models successful")
 
 if __name__ == "__main__":
     main()
