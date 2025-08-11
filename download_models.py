@@ -35,9 +35,9 @@ def download_file(url, local_path, description=""):
                 if chunk:
                     f.write(chunk)
                     downloaded += len(chunk)
-                    if total_size > 0:
-                        progress = (downloaded / total_size) * 100
-                        print(f"\r📊 Progress: {progress:.1f}%", end='', flush=True)
+                    # if total_size > 0:
+                    #     progress = (downloaded / total_size) * 100
+                    #     print(f"\r📊 Progress: {progress:.1f}%", end='', flush=True)
         
         print()  # New line after progress
         logger.info(f"✅ Downloaded {description} successfully")
