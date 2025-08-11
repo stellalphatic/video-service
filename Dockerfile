@@ -32,6 +32,9 @@ ENV PORT=8000
 ENV MODELS_DIR=/app/models
 ENV TEMP_DIR=/app/temp
 
+# downloading pre-compiled DLIB 
+RUN curl -o dlib-19.24.2-cp310-cp310-manylinux_2_17_x86_64.whl https://github.com/dlib/dlib/releases/download/v19.24.2/dlib-19.24.2-cp310-cp310-manylinux_2_17_x86_64.whl
+
 # Copy requirements first for better caching
 COPY requirements.txt .
 
