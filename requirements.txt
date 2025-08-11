@@ -28,4 +28,4 @@ transformers==4.35.0
 diffusers==0.21.4
 accelerate==0.24.1
 xformers==0.0.22
-dlib==19.24.2
+# dlib==19.24.2

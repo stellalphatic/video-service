@@ -40,7 +40,8 @@ COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir dlib-19.24.2-cp310-cp310-manylinux_2_17_x86_64.whl
 
 # Copy model download script
 COPY download_models.py .
