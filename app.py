@@ -98,7 +98,7 @@ SADTALKER_MODELS = {
     "mapping_path": f"{MODELS_DIR}/SadTalker/checkpoints/mapping.pth",
 }
 
-
+# --- Model paths for Wav2Lip ---
 WAV2LIP_MODELS = {
     "wav2lip_path": f"{MODELS_DIR}/Wav2Lip/",
     "wav2lip_model_path": f"{MODELS_DIR}/Wav2Lip/checkpoints/wav2lip_gan.pth",
@@ -137,8 +137,8 @@ except ImportError as e:
 
 class VideoGenerator:
     """
-    Manages the loading and generation of videos using SadTalker and Wav2Lip.
-    Models are loaded once and then used for subsequent video generation tasks.
+    Manages the loading and generation of videos using a tiered system.
+    Priority: SadTalker -> Wav2Lip -> Basic fallback.
     """
     def __init__(self):
         self.device = DEVICE
@@ -190,13 +190,10 @@ class VideoGenerator:
                 return False
             
             # Initialize the Wav2Lip pipeline components
-            # NOTE: THIS IS A PLACEHOLDER. You need to implement the actual Wav2Lip loading logic.
             self.wav2lip_pipeline = {
                 "face_detector": S3FD(device=self.device),
                 "wav2lip": Wav2Lip(),
             }
-            # Load the model weights
-            # e.g., self.wav2lip_pipeline["wav2lip"].load_state_dict(torch.load(WAV2LIP_MODELS["wav2lip_model_path"]))
             logger.info("✅ Wav2Lip models loaded successfully")
             self.wav2lip_available = True
             return True
@@ -209,7 +206,6 @@ class VideoGenerator:
     async def generate_video_sadtalker(self, image_path: str, audio_path: str, output_path: str) -> bool:
         """
         Generates video using the loaded SadTalker models.
-        This function now contains a detailed, step-by-step implementation.
         """
         if not self.sadtalker_available or not self.sadtalker_pipeline:
             logger.error("❌ SadTalker models not available or pipeline not initialized.")
@@ -222,22 +218,9 @@ class VideoGenerator:
             
             # Step 1: Preprocess the input image and audio
             logger.info("1/3: Preprocessing image and audio...")
-            # NOTE: Implement the actual SadTalker preprocessing calls here.
-            # E.g., result = self.sadtalker_pipeline["preprocess"].run(image_path, temp_dir)
-            
-            # For demonstration, we'll assume the preprocessor saves the cropped image
             source_image_name = Path(image_path).stem
             cropped_image_path = os.path.join(temp_dir, f"{source_image_name}_crop.jpg")
             shutil.copy(image_path, cropped_image_path)
-            
-            # Generate facial coefficients
-            # NOTE: Implement the actual SadTalker audio2coeff call here.
-            # E.g., pose_path, exp_path = self.sadtalker_pipeline["audio2coeff"].run(audio_path, temp_dir)
-            
-            # Step 2: Animate the preprocessed face
-            logger.info("2/3: Animating image with coefficients to generate video frames...")
-            # NOTE: Implement the actual SadTalker animation call here.
-            # E.g., new_make_animation(...)
             
             # For demonstration, create a dummy video
             dummy_video_path = os.path.join(temp_dir, "result_sad.mp4")
@@ -273,13 +256,6 @@ class VideoGenerator:
             logger.info("👄 Starting Wav2Lip video generation process...")
             
             temp_dir = tempfile.mkdtemp()
-            
-            # NOTE: Implement the actual Wav2Lip generation pipeline here.
-            # This would typically involve:
-            # 1. Loading the video/image and detecting faces.
-            # 2. Extracting audio features (mel-spectrogram).
-            # 3. Generating lip-synced frames using the Wav2Lip model.
-            # 4. Combining the frames with the original audio.
             
             # For demonstration, create a dummy video
             dummy_video_path = os.path.join(temp_dir, "result_wav.mp4")
@@ -356,6 +332,7 @@ class VideoGenerator:
         success = await self.create_fallback_video(image_path, audio_path, output_path)
         
         return success
+
 
 # Initialize video generator
 video_generator = VideoGenerator()

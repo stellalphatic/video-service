@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y \
     libgtk-3-dev \
     libboost-python-dev \
     libboost-thread-dev \
+    libboost-all-dev \
     libopenblas-dev \
     liblapack-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -41,10 +42,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 
 
 
-RUN pip install --no-cache-dir dlib-bin==19.24.2 || \
-    (curl -L -o dlib.whl https://github.com/davisking/dlib/releases/download/v19.24.2/dlib-19.24.2-cp310-cp310-manylinux_2_17_x86_64.whl && \
-    pip install --no-cache-dir dlib.whl && \
-    rm dlib.whl)
+RUN pip install --no-cache-dir dlib
 
 
 # Copy model download script
