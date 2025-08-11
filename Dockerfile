@@ -32,16 +32,19 @@ ENV PORT=8000
 ENV MODELS_DIR=/app/models
 ENV TEMP_DIR=/app/temp
 
-# downloading pre-compiled DLIB 
-RUN curl -o dlib-19.24.2-cp310-cp310-manylinux_2_17_x86_64.whl https://github.com/dlib/dlib/releases/download/v19.24.2/dlib-19.24.2-cp310-cp310-manylinux_2_17_x86_64.whl
-
 # Copy requirements first for better caching
 COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt && \
-    pip install --no-cache-dir dlib-19.24.2-cp310-cp310-manylinux_2_17_x86_64.whl
+    pip install --no-cache-dir -r requirements.txt
+
+
+
+RUN curl -L -o dlib.whl https://github.com/davisking/dlib/releases/download/v19.24.2/dlib-19.24.2-cp310-cp310-manylinux_2_17_x86_64.whl && \
+    pip install --no-cache-dir dlib.whl && \
+    rm dlib.whl
+
 
 # Copy model download script
 COPY download_models.py .
