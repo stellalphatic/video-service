@@ -47,9 +47,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
 #     pip install --no-cache-dir dlib.whl && \
 #     rm dlib.whl)
 
-RUN git clone https://github.com/davisking/dlib.git && \
-    cd dlib && \
-    pip install .
+RUN pip install --no-cache-dir https://files.pythonhosted.org/packages/b7/c1/81f9b3b0d2d312948615b13824f114092b3a95d7f3532c1c68e1c662934a/dlib-19.24.2-cp310-cp310-manylinux_2_17_x86_64.whl
+
 
 # Copy model download script
 COPY download_models.py .
