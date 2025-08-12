@@ -46,9 +46,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
 #     (curl -L -o dlib.whl https://github.com/davisking/dlib/releases/download/v19.24.2/dlib-19.24.2-cp310-cp310-manylinux_2_17_x86_64.whl && \
 #     pip install --no-cache-dir dlib.whl && \
 #     rm dlib.whl)
-RUN curl -L -o dlib.whl https://github.com/davisking/dlib/releases/download/v19.24.2/dlib-19.24.2-cp310-cp310-manylinux_2_17_x86_64.whl && \
-    pip install --no-cache-dir dlib.whl && \
-    rm dlib.whl
+RUN pip install --no-cache-dir https://github.com/davisking/dlib/releases/download/v19.24.2/dlib-19.24.2-cp310-cp310-manylinux_2_17_x86_64.whl
+
 
 # Copy model download script
 COPY download_models.py .
