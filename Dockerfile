@@ -47,8 +47,12 @@ RUN pip install --no-cache-dir --upgrade pip && \
 #     pip install --no-cache-dir dlib.whl && \
 #     rm dlib.whl)
 
-RUN pip install --no-cache-dir https://files.pythonhosted.org/packages/b7/c1/81f9b3b0d2d312948615b13824f114092b3a95d7f3532c1c68e1c662934a/dlib-19.24.2-cp310-cp310-manylinux_2_17_x86_64.whl
-
+RUN wget https://files.pythonhosted.org/packages/26/64/49949b10ec1df2ef6b52e2ae1d4ddb2eb2a8505c6078467d0d0080317315c22/dlib-20.0.0.tar.gz && \
+    tar -xzf dlib-20.0.0.tar.gz && \
+    cd dlib-20.0.0 && \
+    pip install . && \
+    cd .. && \
+    rm dlib-20.0.0.tar.gz
 
 # Copy model download script
 COPY download_models.py .
