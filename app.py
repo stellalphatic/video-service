@@ -1007,15 +1007,15 @@ async def _download_file(url: str, local_path: str):
 @app.post("/generate-video", dependencies=[Depends(verify_api_key)])
 async def generate_video(
     background_tasks: BackgroundTasks,
-    task_id: str = Form(...),
-    text: str = Form(...),
     image_url: str = Form(...),
-    voice_url: str = Form(None),
-    audio_url: str = Form(None),
-    quality: str = Form(default="standard")):
+    audio_url: str = Form(...),
+    quality: str = Form(default="fast")):
     """Generate video from image and audio URLs."""
     if not models_loaded:
         await check_models()
+
+    # Generate task ID
+    task_id = str(uuid.uuid4())
 
     # Initialize task
     video_tasks[task_id] = {
@@ -1025,21 +1025,17 @@ async def generate_video(
         "model_used": "Unknown"
     }
 
-    # Use provided audio_url or generate from text
-    final_audio_url = audio_url if audio_url else voice_url
-
     # Start background video generation
     background_tasks.add_task(
         _run_video_generation,
         task_id,
         image_url,
-        final_audio_url,
+        audio_url,
         "temp/videos",
         quality
     )
 
     return {
-        "success": True,
         "task_id": task_id,
         "status": "queued",
         "quality": quality,
@@ -1052,7 +1048,7 @@ async def generate_video(
         }
     }
 
-@app.get("/video-status/{task_id}", dependencies=[Depends(verify_api_key)])
+@app.get("/video-status/{task_id}")
 async def get_video_status(task_id: str):
     """Get video generation status."""
     # Check if video file exists
@@ -1079,44 +1075,314 @@ async def get_video_status(task_id: str):
         if task_id in video_tasks:
             task_info = video_tasks[task_id].copy()
             return {
-                "success": True,
                 "status": task_info["status"],
                 "model_used": task_info.get("model_used", "Unknown"),
                 "quality": task_info.get("quality", "unknown"),
-                "created_at": task_info.get("created_at", 0),
-                "video_url": f"/download-video/{task_id}" if task_info["status"] == "completed" else None
+                "created_at": task_info.get("created_at", 0)
             }
         else:
-            return {"success": False, "status": "not_found"}
+            return {"status": "not_found"}
 
-@app.get("/download-video/{task_id}")
-async def download_video(task_id: str):
-    """Download generated video"""
-    video_path = f"temp/videos/{task_id}.mp4"
-    if os.path.exists(video_path):
-        return FileResponse(
-            video_path,
-            media_type="video/mp4",
-            filename=f"generated_video_{task_id}.mp4"
+@app.post("/init-stream", dependencies=[Depends(verify_api_key)])
+async def init_stream(request: Request):
+    """Initialize a video streaming session"""
+    try:
+        data = await request.json()
+        session_id = data.get("session_id")
+        avatar_id = data.get("avatar_id")
+        image_url = data.get("image_url")
+        
+        if not session_id or not avatar_id or not image_url:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "Missing required parameters"}
+            )
+        
+        # Create session directory
+        session_dir = os.path.join("temp/streams", session_id)
+        os.makedirs(session_dir, exist_ok=True)
+        
+        # Download avatar image
+        avatar_path = os.path.join(session_dir, "avatar.jpg")
+        response = requests.get(image_url, stream=True, timeout=60)
+        response.raise_for_status()
+        
+        with open(avatar_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        
+        # Initialize session data
+        active_streams[session_id] = {
+            "avatar_id": avatar_id,
+            "avatar_path": avatar_path,
+            "created_at": time.time(),
+            "last_activity": time.time(),
+            "is_speaking": False
+        }
+        
+        # Pre-process avatar for faster streaming
+        img = cv2.imread(avatar_path)
+        if img is not None:
+            # Detect face landmarks
+            face_data = detect_face_landmarks(img)
+            if face_data:
+                active_streams[session_id]["face_data"] = face_data
+                
+                # Generate idle animation frames
+                idle_frames_dir = os.path.join(session_dir, "idle_frames")
+                os.makedirs(idle_frames_dir, exist_ok=True)
+                
+                # Generate 50 idle animation frames (2 seconds at 25fps)
+                for i in range(50):
+                    idle_frame = create_face_animated_frame(
+                        img.copy(),
+                        face_data,
+                        i,
+                        25,
+                        {"intensity": 0.0, "is_speaking": False}
+                    )
+                    cv2.imwrite(os.path.join(idle_frames_dir, f"idle_{i:03d}.jpg"), idle_frame)
+                
+                active_streams[session_id]["idle_frames_dir"] = idle_frames_dir
+        
+        return {"status": "success", "session_id": session_id}
+        
+    except Exception as e:
+        logger.error(f"Error initializing stream: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": str(e)}
         )
-    else:
-        raise HTTPException(status_code=404, detail="Video not found")
+
+@app.post("/end-stream", dependencies=[Depends(verify_api_key)])
+async def end_stream(request: Request):
+    """End a video streaming session"""
+    try:
+        data = await request.json()
+        session_id = data.get("session_id")
+        
+        if not session_id:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "Missing session_id"}
+            )
+        
+        if session_id in active_streams:
+            # Clean up session data
+            session_dir = os.path.join("temp/streams", session_id)
+            if os.path.exists(session_dir):
+                shutil.rmtree(session_dir, ignore_errors=True)
+            
+            del active_streams[session_id]
+            
+            return {"status": "success", "message": "Stream ended"}
+        else:
+            return JSONResponse(
+                status_code=404,
+                content={"status": "error", "message": "Session not found"}
+            )
+            
+    except Exception as e:
+        logger.error(f"Error ending stream: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": str(e)}
+        )
+
+@app.websocket("/stream/{session_id}")
+async def stream_video(websocket: WebSocket, session_id: str):
+    """Stream video frames for real-time avatar animation"""
+    await websocket.accept()
+    
+    if session_id not in active_streams:
+        await websocket.send_json({"type": "error", "message": "Session not found"})
+        await websocket.close()
+        return
+    
+    session_data = active_streams[session_id]
+    avatar_path = session_data["avatar_path"]
+    face_data = session_data.get("face_data")
+    idle_frames_dir = session_data.get("idle_frames_dir")
+    
+    # Load avatar image
+    img = cv2.imread(avatar_path)
+    if img is None:
+        await websocket.send_json({"type": "error", "message": "Failed to load avatar image"})
+        await websocket.close()
+        return
+    
+    # If no face data, try to detect face
+    if not face_data:
+        face_data = detect_face_landmarks(img)
+        if face_data:
+            session_data["face_data"] = face_data
+
+    # Initialize variables
+    is_speaking = False
+    audio_buffer = []
+    frame_rate = 25
+    frame_interval = 1.0 / frame_rate
+    idle_frame_index = 0
+    last_frame_time = time.time()
+    
+    try:
+        # Send ready message
+        await websocket.send_json({"type": "ready"})
+        
+        # Main streaming loop
+        while True:
+            # Update last activity time
+            session_data["last_activity"] = time.time()
+            
+            # Check for incoming messages
+            try:
+                data = await asyncio.wait_for(websocket.receive(), timeout=0.01)
+                
+                if isinstance(data, dict) and data.get("type") == "text":
+                    message = json.loads(data["text"])
+                    
+                    if message.get("type") == "speech_start":
+                        is_speaking = True
+                        session_data["is_speaking"] = True
+                    elif message.get("type") == "speech_end":
+                        is_speaking = False
+                        session_data["is_speaking"] = False
+                    elif message.get("type") == "stop_speaking":
+                        is_speaking = False
+                        session_data["is_speaking"] = False
+                        audio_buffer = []
+                        
+                elif isinstance(data, bytes) or isinstance(data, bytearray):
+                    # Audio data for lip sync
+                    audio_buffer.append(data)
+            except asyncio.TimeoutError:
+                pass
+            
+            # Check if it's time to send a new frame
+            current_time = time.time()
+            if current_time - last_frame_time >= frame_interval:
+                last_frame_time = current_time
+                
+                # Generate frame based on state
+                if is_speaking and face_data:
+                    # Generate speaking frame with lip sync
+                    # Use audio buffer to determine mouth shape
+                    audio_intensity = 0.5  # Default intensity
+                    if audio_buffer:
+                        # Simple analysis of latest audio chunk
+                        latest_audio = audio_buffer[-1]
+                        if isinstance(latest_audio, bytes) or isinstance(latest_audio, bytearray):
+                            try:
+                                # Convert to numpy array and calculate intensity
+                                audio_np = np.frombuffer(latest_audio, dtype=np.int16).astype(np.float32) / 32768.0
+                                audio_intensity = min(1.0, np.sqrt(np.mean(audio_np ** 2)) * 5.0)
+                            except Exception as e:
+                                logger.error(f"Error processing audio: {e}")
+                    
+                    # Create animated frame
+                    frame = create_face_animated_frame(
+                        img.copy(),
+                        face_data,
+                        int(time.time() * frame_rate) % 1000,  # Frame index based on time
+                        frame_rate,
+                        {
+                            "intensity": audio_intensity,
+                            "is_speaking": True,
+                            "spectral_centroid": 1000 + 500 * audio_intensity
+                        }
+                    )
+                    
+                    # Limit audio buffer size
+                    if len(audio_buffer) > 10:
+                        audio_buffer = audio_buffer[-10:]
+                        
+                elif idle_frames_dir and os.path.exists(idle_frames_dir):
+                    # Use pre-generated idle animation frames
+                    idle_frame_path = os.path.join(idle_frames_dir, f"idle_{idle_frame_index:03d}.jpg")
+                    if os.path.exists(idle_frame_path):
+                        frame = cv2.imread(idle_frame_path)
+                        idle_frame_index = (idle_frame_index + 1) % 50  # Loop through 50 frames
+                    else:
+                        # Fallback to basic animation
+                        frame = create_face_animated_frame(
+                            img.copy(),
+                            face_data,
+                            int(time.time() * frame_rate) % 1000,
+                            frame_rate,
+                            {"intensity": 0.0, "is_speaking": False}
+                        )
+                else:
+                    # Fallback to basic animation
+                    frame = create_face_animated_frame(
+                        img.copy(),
+                        face_data,
+                        int(time.time() * frame_rate) % 1000,
+                        frame_rate,
+                        {"intensity": 0.0, "is_speaking": False}
+                    )
+                
+                # Convert frame to JPEG
+                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                
+                # Send frame to client
+                await websocket.send_bytes(buffer.tobytes())
+                
+                # Send frame ready message
+                await websocket.send_json({"type": "frame_ready"})
+            
+            # Small delay to prevent CPU overload
+            await asyncio.sleep(0.01)
+            
+    except WebSocketDisconnect:
+        logger.info(f"Client disconnected from stream {session_id}")
+    except Exception as e:
+        logger.error(f"Error in video stream: {e}")
+        try:
+            await websocket.send_json({"type": "error", "message": str(e)})
+        except:
+            pass
+    finally:
+        # Update session data
+        if session_id in active_streams:
+            active_streams[session_id]["is_speaking"] = False
+
+@app.get("/models/status")
+async def models_status():
+    """Get detailed model status."""
+    if not models_loaded:
+        await check_models()
+    return {
+        "models_loaded": models_loaded,
+        "device": DEVICE,
+        "sadtalker": {
+            "available": sadtalker_available,
+            "models": {name: os.path.exists(path) for name, path in SADTALKER_MODELS.items()}
+        },
+        "wav2lip": {
+            "available": wav2lip_available,
+            "models": {name: os.path.exists(path) for name, path in WAV2LIP_MODELS.items()}
+        },
+        "features": {
+            "high_quality_generation": sadtalker_available,
+            "fast_generation": wav2lip_available,
+            "animated_fallback": True,
+            "basic_fallback": True,
+            "real_time_streaming": True,
+            "face_detection": True,
+            "lip_sync": True
+        }
+    }
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
     return {
-        "success": True,
-        "message": "Video service is running",
-        "models": {
-            "sadtalker": sadtalker_available,
-            "wav2lip": wav2lip_available,
-            "mediapipe": True
-        },
         "status": "healthy",
         "models_loaded": models_loaded,
+        "sadtalker_available": sadtalker_available,
+        "wav2lip_available": wav2lip_available,
         "service": "professional-video-generation",
-        "version": "4.0.0",
+        "version": "3.0.0",
         "device": DEVICE,
         "cuda_available": torch.cuda.is_available(),
         "active_streams": len(active_streams),
@@ -1141,7 +1407,7 @@ async def root():
     """Root endpoint"""
     return {
         "service": "Professional Video Generation Service",
-        "version": "4.0.0",
+        "version": "3.0.0",
         "status": "running",
         "features": [
             "SadTalker Integration",
@@ -1157,6 +1423,7 @@ async def root():
         "endpoints": {
             "generate_video": "/generate-video",
             "video_status": "/video-status/{task_id}",
+            "models_status": "/models/status",
             "health": "/health"
         }
     }
