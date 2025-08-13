@@ -16,6 +16,7 @@ import time
 from functools import wraps
 import torch
 import sys
+import base64
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -47,8 +48,36 @@ def require_auth(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         auth_header = request.headers.get('Authorization')
-        if not auth_header or not auth_header.startswith('VIDEO_GEN_AUTH-'):
-            return jsonify({'success': False, 'message': 'Unauthorized'}), 401
+        if not auth_header:
+            return jsonify({'success': False, 'message': 'Authorization header required'}), 401
+        
+        try:
+            # Handle Bearer token format
+            if auth_header.startswith('Bearer '):
+                token = auth_header[7:]  # Remove 'Bearer ' prefix
+                
+                # Decode base64 token
+                decoded = base64.b64decode(token).decode('utf-8')
+                api_key, timestamp = decoded.split(':', 1)
+                
+                # Verify API key
+                expected_key = os.getenv('VIDEO_SERVICE_API_KEY')
+                if not expected_key or api_key != expected_key:
+                    return jsonify({'success': False, 'message': 'Invalid API key'}), 401
+                
+                # Optional: Check timestamp for token expiry (within 1 hour)
+                current_time = int(time.time())
+                token_time = int(timestamp)
+                if current_time - token_time > 3600:  # 1 hour
+                    return jsonify({'success': False, 'message': 'Token expired'}), 401
+                    
+            else:
+                return jsonify({'success': False, 'message': 'Invalid authorization format'}), 401
+                
+        except Exception as e:
+            logger.error(f"Auth error: {e}")
+            return jsonify({'success': False, 'message': 'Invalid token format'}), 401
+            
         return f(*args, **kwargs)
     return decorated_function
 
@@ -473,7 +502,7 @@ def generate_video():
         data = request.get_json()
         task_id = data.get('task_id')
         text = data.get('text')
-        image_url = data.get('image_url')  # Fixed: was avatar_image_url
+        image_url = data.get('image_url')
         voice_url = data.get('voice_url')
         quality = data.get('quality', 'standard')
         audio_url = data.get('audio_url')  # Optional pre-generated audio
