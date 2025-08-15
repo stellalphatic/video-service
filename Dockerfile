@@ -62,6 +62,12 @@ RUN python download_models.py
 # Create symlink for SadTalker checkpoints
 RUN ln -s /app/models/SadTalker/checkpoints /app/checkpoints
 
+# copying config files from sadtalker folder to root folder doing by symlink and below that by simply copying
+RUN mkdir -p /app/src && \
+    ln -s /app/models/SadTalker/src/config /app/src/config
+# RUN mkdir -p /app/src/config && \
+#     cp -r /app/models/SadTalker/src/config/* /app/src/config/
+
 # Copy application code
 COPY app.py .
 
