@@ -262,19 +262,18 @@ class VideoGenerator:
 
             # SadTalker inference command with proper arguments
             cmd = [
-                sys.executable, os.path.join(sadtalker_path, "inference.py"),
-                "--driven_audio", audio_path,
-                "--source_image", image_path,
-                "--result_dir", result_dir,
-                "--still",
-                "--preprocess", "crop" if quality == "high" else "resize",
-                "--size", "512" if quality == "high" else "256",
-                "--pose_style", "0",
-                "--expression_scale", "1.0",
-                "--facerender", "facevid2vid",
-                "--batch_size", "2" if quality == "high" else "4",
-                "--enhancer", "gfpgan" if quality == "high" else "RestoreFormer"
-            ]
+                 sys.executable, os.path.join(sadtalker_path, "inference.py"),
+                 "--driven_audio", audio_path,
+                 "--source_image", image_path,
+                 "--result_dir", result_dir,
+                 "--still",
+                 "--preprocess", "crop" if quality == "high" else "resize",
+                 "--size", "512" if quality == "high" else "256",
+                 "--pose_style", "0",
+                 "--expression_scale", "1.0",
+                 "--batch_size", "2" if quality == "high" else "4",
+                 "--enhancer", "gfpgan" if quality == "high" else "RestoreFormer"
+               ]
 
             if DEVICE == "cpu":
                 cmd.append("--cpu")
