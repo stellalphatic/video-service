@@ -109,10 +109,10 @@ wav2lip_available = False
 
 # Model paths
 SADTALKER_MODELS = {
-    "audio2exp": f"{MODELS_DIR}/SadTalker/checkpoints/auido2exp_00300-model.pth",
+    "audio2exp": f"{MODELS_DIR}/SadTalker/checkpoints/audio2exp_00300-model.pth",
     "facevid2vid": f"{MODELS_DIR}/SadTalker/checkpoints/facevid2vid_00189-model.pth.tar",
     "epoch_20": f"{MODELS_DIR}/SadTalker/checkpoints/epoch_20.pth",
-    "audio2pose": f"{MODELS_DIR}/SadTalker/checkpoints/auido2pose_00140-model.pth",
+    "audio2pose": f"{MODELS_DIR}/SadTalker/checkpoints/audio2pose_00140-model.pth",
     "shape_predictor": f"{MODELS_DIR}/SadTalker/checkpoints/shape_predictor_68_face_landmarks.dat",
     "mapping": f"{MODELS_DIR}/SadTalker/checkpoints/mapping_00229-model.pth.tar"
 }
@@ -878,8 +878,6 @@ async def _run_video_generation(task_id: str, image_url: str, audio_url: str, ou
         audio_path = os.path.join(temp_dir, "input.wav")
         output_path = os.path.join(output_dir, f"{task_id}.mp4")
 
-        # Download files
-        logger.info(f"📥 Downloading files for task {task_id}")
         await _download_file(image_url, image_path)
         await _download_file(audio_url, audio_path)
 
@@ -890,15 +888,23 @@ async def _run_video_generation(task_id: str, image_url: str, audio_url: str, ou
         if sadtalker_available:
             logger.info(f"🎭 Trying SadTalker for task {task_id}")
             video_tasks[task_id]["model_used"] = "SadTalker"
-            success = await video_generator.generate_video_sadtalker(image_path, audio_path, output_path, quality)
+            result = await video_generator.generate_video_sadtalker(image_path, audio_path, output_path, quality)
+            if result and os.path.exists(result):
+                if result != output_path:
+                    shutil.move(result, output_path)
+                success = True
 
-        # 2. If SadTalker fails, try Wav2Lip
+        # 2. Try Wav2Lip if SadTalker failed
         if not success and wav2lip_available:
             logger.info(f"👄 Trying Wav2Lip for task {task_id}")
             video_tasks[task_id]["model_used"] = "Wav2Lip"
-            success = await video_generator.generate_video_wav2lip(image_path, audio_path, output_path, quality)
+            result = await video_generator.generate_video_wav2lip(image_path, audio_path, output_path, quality)
+            if result and os.path.exists(result):
+                if result != output_path:
+                    shutil.move(result, output_path)
+                success = True
 
-        # 3. If both fail, fallback to animated
+        # 3. Fallback to animated
         if not success:
             logger.info(f"🎬 Falling back to animated video for task {task_id}")
             video_tasks[task_id]["model_used"] = "Animated"
@@ -908,18 +914,18 @@ async def _run_video_generation(task_id: str, image_url: str, audio_url: str, ou
             except Exception as e:
                 logger.error(f"❌ Animated video failed: {e}")
 
-        # 4. If all else fails, fallback to basic
+        # 4. Fallback to basic
         if not success:
             logger.info(f"🎬 Falling back to basic video for task {task_id}")
             video_tasks[task_id]["model_used"] = "Basic"
             success = video_generator.create_basic_video_with_audio(image_path, audio_path, output_path)
 
-        if success:
+        if success and os.path.exists(output_path):
             video_tasks[task_id]["status"] = "completed"
             video_tasks[task_id]["output_path"] = output_path
             logger.info(f"✅ Video generation completed for task {task_id} using {video_tasks[task_id]['model_used']}")
         else:
-            raise Exception("All video generation methods failed")
+            raise Exception("All video generation methods failed or output file missing")
 
     except Exception as e:
         logger.error(f"❌ Video generation failed for task {task_id}: {e}")
