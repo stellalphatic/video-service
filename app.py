@@ -29,6 +29,8 @@ import traceback
 import base64
 import mediapipe as mp
 
+from src.gradio_demo import SadTalker
+
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -109,7 +111,8 @@ SADTALKER_MODELS = {
     "facevid2vid": f"{MODELS_DIR}/SadTalker/checkpoints/facevid2vid_00189-model.pth.tar",
     "epoch_20": f"{MODELS_DIR}/SadTalker/checkpoints/epoch_20.pth",
     "audio2pose": f"{MODELS_DIR}/SadTalker/checkpoints/auido2pose_00140-model.pth",
-    "shape_predictor": f"{MODELS_DIR}/SadTalker/checkpoints/shape_predictor_68_face_landmarks.dat"
+    "shape_predictor": f"{MODELS_DIR}/SadTalker/checkpoints/shape_predictor_68_face_landmarks.dat",
+    "mapping": f"{MODELS_DIR}/SadTalker/checkpoints/mapping_00229-model.pth.tar"
 }
 
 WAV2LIP_MODELS = {
@@ -132,45 +135,14 @@ class VideoGenerator:
         logger.info(f"VideoGenerator initialized on device: {self.device}")
 
     async def load_sadtalker_models(self):
-        """Load SadTalker models"""
+        ...
         try:
-            logger.info("🎭 Loading SadTalker models...")
-            sadtalker_path = os.path.join(MODELS_DIR, "SadTalker")
-            if not os.path.exists(sadtalker_path):
-                logger.error("❌ SadTalker repository not found")
-                return False
-                
-            # Add SadTalker to Python path
-            if sadtalker_path not in sys.path:
-                sys.path.insert(0, sadtalker_path)
-
-            # Check if all model files exist
-            missing_models = []
-            for name, path in SADTALKER_MODELS.items():
-                if not os.path.exists(path):
-                    missing_models.append(f"{name}: {path}")
-
-            if missing_models:
-                logger.error(f"❌ Missing SadTalker model files: {missing_models}")
-                return False
-
-            # Try to import SadTalker modules
-            try:
-                from src.utils.preprocess import CropAndExtract
-                from src.test_audio2coeff import Audio2Coeff  
-                from src.facerender.animate import AnimateFromCoeff
-                from src.generate_batch import get_data
-                from src.generate_facerender_batch import get_facerender_data
-                
-                logger.info("✅ SadTalker modules imported successfully")
-                return True
-                
-            except ImportError as e:
-                logger.error(f"❌ Failed to import SadTalker modules: {e}")
-                return False
-
+            from src.gradio_demo import SadTalker
+            self.sadtalker = SadTalker(lazy_load=True)
+            logger.info("✅ SadTalker class loaded successfully")
+            return True
         except Exception as e:
-            logger.error(f"❌ Failed to load SadTalker models: {e}")
+            logger.error(f"❌ Failed to load SadTalker: {e}")
             return False
 
     async def load_wav2lip_models(self):
@@ -248,71 +220,57 @@ class VideoGenerator:
             logger.error(f"❌ Failed to load Wav2Lip models: {e}")
             return False
 
-    async def generate_video_sadtalker(self, image_path: str, audio_path: str, output_path: str, quality: str = "high") -> bool:
-        """Generate video using SadTalker"""
+    async def generate_video_sadtalker(self, image_path, audio_path, output_path, quality="high"):
         try:
-            logger.info("🎭 Generating video with SadTalker...")
-            sadtalker_path = os.path.join(MODELS_DIR, "SadTalker")
-            if not os.path.exists(sadtalker_path):
-                logger.error("❌ SadTalker not found")
+            logger.info("🎭 Generating video with SadTalker (Python API)...")
+            if not self.sadtalker:
+                logger.error("SadTalker not loaded")
                 return False
 
-            # Prepare arguments for SadTalker
-            result_dir = str(Path(output_path).parent)
+            # Set parameters as in the gradio_demo/test
+            preprocess_type = "crop" if quality == "high" else "resize"
+            is_still_mode = True
+            enhancer = False
+            batch_size = 2 if quality == "high" else 4
+            size_of_image = 512 if quality == "high" else 256
+            pose_style = 0
+            facerender = "facevid2vid"
+            exp_weight = 1.0
+            use_ref_video = False
+            ref_video = None
+            ref_info = "pose"
+            use_idle_mode = False
+            length_of_audio = None
+            blink_every = True
 
-            # SadTalker inference command with proper arguments
-            cmd = [
-                 sys.executable, os.path.join(sadtalker_path, "inference.py"),
-                 "--driven_audio", audio_path,
-                 "--source_image", image_path,
-                 "--result_dir", result_dir,
-                 "--still",
-                 "--preprocess", "crop" if quality == "high" else "resize",
-                 "--size", "512" if quality == "high" else "256",
-                 "--pose_style", "0",
-                 "--expression_scale", "1.0",
-                 "--batch_size", "2" if quality == "high" else "4",
-                 "--enhancer", "gfpgan" if quality == "high" else "RestoreFormer"
-               ]
-
-            if DEVICE == "cpu":
-                cmd.append("--cpu")
-
-            logger.info(f"🚀 Running SadTalker: {' '.join(cmd)}")
-
-            # Set environment variables
-            env = os.environ.copy()
-            env['PYTHONPATH'] = sadtalker_path + ':' + env.get('PYTHONPATH', '')
-
-            result = subprocess.run(
-                cmd, 
-                capture_output=True, 
-                text=True, 
-                cwd=sadtalker_path, 
-                timeout=600,  # 10 minutes timeout
-                env=env
+            # Call SadTalker.test() as in the demo
+            result = self.sadtalker.test(
+                image_path,
+                audio_path,
+                preprocess_type,
+                is_still_mode,
+                enhancer,
+                batch_size,
+                size_of_image,
+                pose_style,
+                facerender,
+                exp_weight,
+                use_ref_video,
+                ref_video,
+                ref_info,
+                use_idle_mode,
+                length_of_audio,
+                blink_every
             )
-
-            if result.returncode != 0:
-                logger.error(f"❌ SadTalker failed: {result.stderr}")
-                logger.error(f"❌ SadTalker stdout: {result.stdout}")
+            # result is a path to the generated video
+            if isinstance(result, str) and os.path.exists(result):
+                shutil.move(result, output_path)
+                logger.info(f"✅ SadTalker generation completed: {output_path}")
+                return True
+            else:
+                logger.error(f"SadTalker did not return a valid video path: {result}")
                 return False
 
-            # Find generated video file
-            result_dir_path = Path(result_dir)
-            generated_files = list(result_dir_path.glob("*.mp4"))
-            if not generated_files:
-                logger.error("❌ No video file generated by SadTalker")
-                return False
-
-            # Move to expected output path
-            shutil.move(str(generated_files[0]), output_path)
-            logger.info(f"✅ SadTalker generation completed: {output_path}")
-            return True
-
-        except subprocess.TimeoutExpired:
-            logger.error("❌ SadTalker generation timed out")
-            return False
         except Exception as e:
             logger.error(f"❌ SadTalker generation error: {e}")
             logger.error(f"❌ Traceback: {traceback.format_exc()}")
