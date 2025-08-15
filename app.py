@@ -246,6 +246,7 @@ class VideoGenerator:
             length_of_audio = None
             blink_every = True
 
+            logger.info(f"SadTalker.test args: {image_path}, {audio_path}, {preprocess_type}, {is_still_mode}, {enhancer}, {batch_size}, {size_of_image}, {pose_style}, {facerender}, {exp_weight}, {use_ref_video}, {ref_video}, {ref_info}, {use_idle_mode}, {length_of_audio}, {blink_every}")
             # Call SadTalker.test() as in the demo
             result = self.sadtalker.test(
                 image_path,
@@ -345,6 +346,9 @@ class VideoGenerator:
                 timeout=300,  # 5 minutes timeout
                 env=env
             )
+            logger.info(f"Wav2Lip stdout: {result.stdout}")
+            logger.info(f"Wav2Lip stderr: {result.stderr}")
+            logger.info(f"Checking for output file: {output_path} -> {os.path.exists(output_path)}")
             
             if result.returncode != 0:
                 logger.error(f"❌ Wav2Lip failed: {result.stderr}")
@@ -877,7 +881,7 @@ async def _run_video_generation(task_id: str, image_url: str, audio_url: str, ou
         logger.info(f"🎬 Starting video generation for task {task_id}")
         image_path = os.path.join(temp_dir, "input.jpg")
         audio_path = os.path.join(temp_dir, "input.wav")
-        output_path = os.path.join(output_dir, f"{task_id}.mp4")
+        output_path = os.path.abspath(os.path.join(output_dir, f"{task_id}.mp4"))
 
         await _download_file(image_url, image_path)
         await _download_file(audio_url, audio_path)
