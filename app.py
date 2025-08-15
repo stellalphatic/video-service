@@ -911,7 +911,6 @@ def simple_audio_analysis(audio_path: str, frame_rate: int) -> dict:
 
 # --- Background Task Functions ---
 async def _run_video_generation(task_id: str, image_url: str, audio_url: str, output_dir: str, quality: str):
-    """Run video generation in background"""
     temp_dir = tempfile.mkdtemp()
     try:
         logger.info(f"🎬 Starting video generation for task {task_id}")
@@ -924,22 +923,22 @@ async def _run_video_generation(task_id: str, image_url: str, audio_url: str, ou
         await _download_file(image_url, image_path)
         await _download_file(audio_url, audio_path)
 
-        # Update task status
         video_tasks[task_id]["status"] = "processing"
-
         success = False
 
-        # Try SadTalker or Wav2Lip first, based on quality
-        if quality == "high" and sadtalker_available:
+        # 1. Try SadTalker
+        if sadtalker_available:
             logger.info(f"🎭 Trying SadTalker for task {task_id}")
             video_tasks[task_id]["model_used"] = "SadTalker"
             success = await video_generator.generate_video_sadtalker(image_path, audio_path, output_path, quality)
-        elif quality == "fast" and wav2lip_available:
+
+        # 2. If SadTalker fails, try Wav2Lip
+        if not success and wav2lip_available:
             logger.info(f"👄 Trying Wav2Lip for task {task_id}")
             video_tasks[task_id]["model_used"] = "Wav2Lip"
             success = await video_generator.generate_video_wav2lip(image_path, audio_path, output_path, quality)
 
-        # If advanced models not available or failed, try fallback animation
+        # 3. If both fail, fallback to animated
         if not success:
             logger.info(f"🎬 Falling back to animated video for task {task_id}")
             video_tasks[task_id]["model_used"] = "Animated"
@@ -949,7 +948,7 @@ async def _run_video_generation(task_id: str, image_url: str, audio_url: str, ou
             except Exception as e:
                 logger.error(f"❌ Animated video failed: {e}")
 
-        # If all else fails, use basic video
+        # 4. If all else fails, fallback to basic
         if not success:
             logger.info(f"🎬 Falling back to basic video for task {task_id}")
             video_tasks[task_id]["model_used"] = "Basic"
@@ -966,7 +965,6 @@ async def _run_video_generation(task_id: str, image_url: str, audio_url: str, ou
         logger.error(f"❌ Video generation failed for task {task_id}: {e}")
         video_tasks[task_id]["status"] = "failed"
         video_tasks[task_id]["error"] = str(e)
-        # ...existing error handling...
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 

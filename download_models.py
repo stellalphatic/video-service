@@ -94,6 +94,10 @@ def download_sadtalker_models():
         "shape_predictor_68_face_landmarks.dat": [
             "https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/shape_predictor_68_face_landmarks.dat",
             "https://huggingface.co/vinthony/SadTalker/resolve/main/shape_predictor_68_face_landmarks.dat"
+        ],
+        "mapping_00229-model.pth.tar": [
+             "https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/mapping_00229-model.pth.tar",
+             "https://huggingface.co/vinthony/SadTalker/resolve/main/mapping_00229-model.pth.tar"
         ]
     }
     
