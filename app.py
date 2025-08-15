@@ -112,7 +112,7 @@ SADTALKER_MODELS = {
     "audio2exp": f"{MODELS_DIR}/SadTalker/checkpoints/audio2exp_00300-model.pth",
     "facevid2vid": f"{MODELS_DIR}/SadTalker/checkpoints/facevid2vid_00189-model.pth.tar",
     "epoch_20": f"{MODELS_DIR}/SadTalker/checkpoints/epoch_20.pth",
-    "audio2pose": f"{MODELS_DIR}/SadTalker/checkpoints/audio2pose_00140-model.pth",
+    "auido2pose": f"{MODELS_DIR}/SadTalker/checkpoints/auido2pose_00140-model.pth",
     "shape_predictor": f"{MODELS_DIR}/SadTalker/checkpoints/shape_predictor_68_face_landmarks.dat",
     "mapping": f"{MODELS_DIR}/SadTalker/checkpoints/mapping_00229-model.pth.tar"
 }
@@ -889,9 +889,7 @@ async def _run_video_generation(task_id: str, image_url: str, audio_url: str, ou
             logger.info(f"🎭 Trying SadTalker for task {task_id}")
             video_tasks[task_id]["model_used"] = "SadTalker"
             result = await video_generator.generate_video_sadtalker(image_path, audio_path, output_path, quality)
-            if result and os.path.exists(result):
-                if result != output_path:
-                    shutil.move(result, output_path)
+            if result and os.path.exists(output_path):
                 success = True
 
         # 2. Try Wav2Lip if SadTalker failed
@@ -899,10 +897,8 @@ async def _run_video_generation(task_id: str, image_url: str, audio_url: str, ou
             logger.info(f"👄 Trying Wav2Lip for task {task_id}")
             video_tasks[task_id]["model_used"] = "Wav2Lip"
             result = await video_generator.generate_video_wav2lip(image_path, audio_path, output_path, quality)
-            if result and os.path.exists(result):
-                if result != output_path:
-                    shutil.move(result, output_path)
-                success = True
+            if result and os.path.exists(output_path):
+                 success = True
 
         # 3. Fallback to animated
         if not success:
@@ -931,6 +927,10 @@ async def _run_video_generation(task_id: str, image_url: str, audio_url: str, ou
         logger.error(f"❌ Video generation failed for task {task_id}: {e}")
         video_tasks[task_id]["status"] = "failed"
         video_tasks[task_id]["error"] = str(e)
+        # Write error file so /video-status can return failure
+        error_path = f"temp/errors/{task_id}.json"
+        with open(error_path, "w") as f:
+            json.dump({"status": "failed", "error": str(e)}, f)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 

@@ -75,13 +75,13 @@ def download_sadtalker_models():
     
     # SadTalker model URLs- multiple sources for reliability
     models = {
-        "audio2exp_00300-model.pth": [
-            "https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/audio2exp_00300-model.pth",
-            "https://huggingface.co/vinthony/SadTalker/resolve/main/audio2exp_00300-model.pth"
-        ],
-        "audio2pose_00140-model.pth": [
-            "https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/audio2pose_00140-model.pth",
-            "https://huggingface.co/vinthony/SadTalker/resolve/main/audio2pose_00140-model.pth"
+        "auido2exp_00300-model.pth": [
+        "https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/auido2exp_00300-model.pth",
+        "https://huggingface.co/vinthony/SadTalker/resolve/main/auido2exp_00300-model.pth"
+       ],
+       "auido2pose_00140-model.pth": [
+        "https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/auido2pose_00140-model.pth",
+        "https://huggingface.co/vinthony/SadTalker/resolve/main/auido2pose_00140-model.pth"
         ],
         "facevid2vid_00189-model.pth.tar": [
             "https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/facevid2vid_00189-model.pth.tar",
