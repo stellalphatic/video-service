@@ -898,8 +898,15 @@ async def _run_video_generation(task_id: str, image_url: str, audio_url: str, ou
             logger.info(f"👄 Trying Wav2Lip for task {task_id}")
             video_tasks[task_id]["model_used"] = "Wav2Lip"
             result = await video_generator.generate_video_wav2lip(image_path, audio_path, output_path, quality)
-            if result and os.path.exists(output_path):
-                 success = True
+            # Wait up to 2 seconds for file to appear (handles slow disk flush)
+            for _ in range(10):
+                if os.path.exists(output_path):
+                    logger.info(f"✅ Wav2Lip output file detected: {output_path}")
+                    success = True
+                    break
+                time.sleep(0.2)
+            if not success:
+                logger.error(f"❌ Wav2Lip reported success but output file not found: {output_path}")
 
         # 3. Fallback to animated
         if not success:

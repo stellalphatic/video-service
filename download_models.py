@@ -57,6 +57,27 @@ def clone_repository(repo_url, local_path, description=""):
     except Exception as e:
         logger.error(f"❌ Failed to clone {description}: {e}")
         return False
+    
+def ensure_sadtalker_config():
+    """Ensure auido2pose.yaml exists in SadTalker config directory."""
+    config_dir = os.path.join(MODELS_DIR, "SadTalker", "src", "config")
+    os.makedirs(config_dir, exist_ok=True)
+    yaml_path = os.path.join(config_dir, "auido2pose.yaml")
+    if not os.path.exists(yaml_path):
+        url = "https://raw.githubusercontent.com/OpenTalker/SadTalker/main/src/config/auido2pose.yaml"
+        logger.info(f"📥 Downloading SadTalker config: {url}")
+        try:
+            r = requests.get(url, timeout=60)
+            r.raise_for_status()
+            with open(yaml_path, "wb") as f:
+                f.write(r.content)
+            logger.info("✅ Downloaded auido2pose.yaml")
+        except Exception as e:
+            logger.error(f"❌ Failed to download auido2pose.yaml: {e}")
+            return False
+    else:
+        logger.info("✅ auido2pose.yaml already exists")
+    return True
 
 def download_sadtalker_models():
     """Download SadTalker models and repository"""
@@ -69,6 +90,10 @@ def download_sadtalker_models():
     if not os.path.exists(sadtalker_dir):
         if not clone_repository("https://github.com/OpenTalker/SadTalker.git", sadtalker_dir, "SadTalker repository"):
             return False
+    
+    # Ensure config file exists
+    if not ensure_sadtalker_config():
+        return False
     
     # Create checkpoints directory
     os.makedirs(checkpoints_dir, exist_ok=True)
