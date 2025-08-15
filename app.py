@@ -29,6 +29,8 @@ import traceback
 import base64
 import mediapipe as mp
 
+
+sys.path.insert(0, "/app/models/SadTalker")
 from src.gradio_demo import SadTalker
 
 # Configure logging

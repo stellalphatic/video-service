@@ -59,6 +59,9 @@ COPY download_models.py .
 # Download models during build (this runs once)
 RUN python download_models.py
 
+# Create symlink for SadTalker checkpoints
+RUN ln -s /app/models/SadTalker/checkpoints /app/checkpoints
+
 # Copy application code
 COPY app.py .
 
