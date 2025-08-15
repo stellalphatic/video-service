@@ -928,43 +928,33 @@ async def _run_video_generation(task_id: str, image_url: str, audio_url: str, ou
         # Update task status
         video_tasks[task_id]["status"] = "processing"
 
-        # Try different generation methods based on quality and availability
         success = False
 
-        # First try animated video (always works)
-        try:
-            logger.info(f"🎬 Generating animated video for task {task_id}")
+        # Try SadTalker or Wav2Lip first, based on quality
+        if quality == "high" and sadtalker_available:
+            logger.info(f"🎭 Trying SadTalker for task {task_id}")
+            video_tasks[task_id]["model_used"] = "SadTalker"
+            success = await video_generator.generate_video_sadtalker(image_path, audio_path, output_path, quality)
+        elif quality == "fast" and wav2lip_available:
+            logger.info(f"👄 Trying Wav2Lip for task {task_id}")
+            video_tasks[task_id]["model_used"] = "Wav2Lip"
+            success = await video_generator.generate_video_wav2lip(image_path, audio_path, output_path, quality)
+
+        # If advanced models not available or failed, try fallback animation
+        if not success:
+            logger.info(f"🎬 Falling back to animated video for task {task_id}")
             video_tasks[task_id]["model_used"] = "Animated"
-            create_animated_talking_video(image_path, audio_path, output_path, quality)
-            success = True
-        except Exception as e:
-            logger.error(f"❌ Animated video failed: {e}")
+            try:
+                create_animated_talking_video(image_path, audio_path, output_path, quality)
+                success = True
+            except Exception as e:
+                logger.error(f"❌ Animated video failed: {e}")
 
-            # Try SadTalker if available and quality is high
-            if quality == "high" and sadtalker_available:
-                video_tasks[task_id]["model_used"] = "SadTalker"
-                success = await video_generator.generate_video_sadtalker(image_path, audio_path, output_path, quality)
-                
-                if not success and wav2lip_available:
-                    logger.info(f"🔄 SadTalker failed, falling back to Wav2Lip for task {task_id}")
-                    video_tasks[task_id]["model_used"] = "Wav2Lip"
-                    success = await video_generator.generate_video_wav2lip(image_path, audio_path, output_path, "fast")
-            
-            # Try Wav2Lip if available and quality is fast
-            elif quality == "fast" and wav2lip_available:
-                video_tasks[task_id]["model_used"] = "Wav2Lip"
-                success = await video_generator.generate_video_wav2lip(image_path, audio_path, output_path, quality)
-                
-                if not success and sadtalker_available:
-                    logger.info(f"🔄 Wav2Lip failed, falling back to SadTalker for task {task_id}")
-                    video_tasks[task_id]["model_used"] = "SadTalker"
-                    success = await video_generator.generate_video_sadtalker(image_path, audio_path, output_path, "high")
-
-            # Ultimate fallback to basic video
-            if not success:
-                logger.info(f"🔄 All methods failed, using basic video for task {task_id}")
-                video_tasks[task_id]["model_used"] = "Basic"
-                success = video_generator.create_basic_video_with_audio(image_path, audio_path, output_path)
+        # If all else fails, use basic video
+        if not success:
+            logger.info(f"🎬 Falling back to basic video for task {task_id}")
+            video_tasks[task_id]["model_used"] = "Basic"
+            success = video_generator.create_basic_video_with_audio(image_path, audio_path, output_path)
 
         if success:
             video_tasks[task_id]["status"] = "completed"
@@ -977,15 +967,7 @@ async def _run_video_generation(task_id: str, image_url: str, audio_url: str, ou
         logger.error(f"❌ Video generation failed for task {task_id}: {e}")
         video_tasks[task_id]["status"] = "failed"
         video_tasks[task_id]["error"] = str(e)
-
-        # Save error to file
-        error_path = f"temp/errors/{task_id}.json"
-        try:
-            with open(error_path, 'w') as f:
-                json.dump({"error": str(e), "task_id": task_id}, f)
-        except Exception as save_error:
-            logger.error(f"Failed to save error file: {save_error}")
-
+        # ...existing error handling...
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
