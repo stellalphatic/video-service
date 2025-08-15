@@ -109,12 +109,13 @@ wav2lip_available = False
 
 # Model paths
 SADTALKER_MODELS = {
-    "audio2exp": f"{MODELS_DIR}/SadTalker/checkpoints/audio2exp_00300-model.pth",
+    "auido2exp": f"{MODELS_DIR}/SadTalker/checkpoints/auido2exp_00300-model.pth",
     "facevid2vid": f"{MODELS_DIR}/SadTalker/checkpoints/facevid2vid_00189-model.pth.tar",
     "epoch_20": f"{MODELS_DIR}/SadTalker/checkpoints/epoch_20.pth",
     "auido2pose": f"{MODELS_DIR}/SadTalker/checkpoints/auido2pose_00140-model.pth",
     "shape_predictor": f"{MODELS_DIR}/SadTalker/checkpoints/shape_predictor_68_face_landmarks.dat",
-    "mapping": f"{MODELS_DIR}/SadTalker/checkpoints/mapping_00229-model.pth.tar"
+    "mapping": f"{MODELS_DIR}/SadTalker/checkpoints/mapping_00229-model.pth.tar",
+    "wav2lip": f"{MODELS_DIR}/SadTalker/checkpoints/wav2lip.pth"
 }
 
 WAV2LIP_MODELS = {

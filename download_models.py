@@ -98,6 +98,10 @@ def download_sadtalker_models():
         "mapping_00229-model.pth.tar": [
              "https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/mapping_00229-model.pth.tar",
              "https://huggingface.co/vinthony/SadTalker/resolve/main/mapping_00229-model.pth.tar"
+        ],
+         "wav2lip.pth": [
+        "https://github.com/Rudrabha/Wav2Lip/releases/download/v1.0/wav2lip.pth",
+        "https://huggingface.co/vinthony/SadTalker/resolve/main/wav2lip.pth"
         ]
     }
     
