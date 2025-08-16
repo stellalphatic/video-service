@@ -1,4 +1,4 @@
-# Stage 1: The Builder (for heavy lifting)
+# Stage 1: The Builder(for heavy lifting)
 FROM python:3.8-slim AS builder
 
 # Install system dependencies needed *only for the build process*
