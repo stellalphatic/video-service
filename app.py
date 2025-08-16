@@ -28,6 +28,7 @@ import uuid
 import traceback
 import base64
 import mediapipe as mp
+import glob
 
 
 sys.path.insert(0, "/app/models/SadTalker")
@@ -223,31 +224,38 @@ class VideoGenerator:
             logger.error(f"❌ Failed to load Wav2Lip models: {e}")
             return False
 
-    async def generate_video_sadtalker(self, image_path, audio_path, output_path, quality="high"):
+    import glob
+
+async def generate_video_sadtalker(self, image_path, audio_path, output_path, quality="high"):
+    try:
+        logger.info("🎭 Generating video with SadTalker (Python API)...")
+        if not self.sadtalker:
+            logger.error("SadTalker not loaded")
+            return False
+
+        preprocess_type = "crop" if quality == "high" else "resize"
+        is_still_mode = True
+        enhancer = False
+        batch_size = 2 if quality == "high" else 4
+        size_of_image = 512 if quality == "high" else 256
+        pose_style = 0
+        facerender = "facevid2vid"
+        exp_weight = 1.0
+        use_ref_video = False
+        ref_video = None
+        ref_info = "pose"
+        use_idle_mode = False
+        length_of_audio = None
+        blink_every = True
+
+        # Use a unique result directory for this task
+        result_dir = os.path.abspath(os.path.join("temp", "sadtalker_results", str(uuid.uuid4())))
+        os.makedirs(result_dir, exist_ok=True)
+
+        logger.info(f"SadTalker.test args: {image_path}, {audio_path}, {preprocess_type}, {is_still_mode}, {enhancer}, {batch_size}, {size_of_image}, {pose_style}, {facerender}, {exp_weight}, {use_ref_video}, {ref_video}, {ref_info}, {use_idle_mode}, {length_of_audio}, {blink_every}, result_dir={result_dir}")
+
+        # Try API usage
         try:
-            logger.info("🎭 Generating video with SadTalker (Python API)...")
-            if not self.sadtalker:
-                logger.error("SadTalker not loaded")
-                return False
-
-            # Set parameters as in the gradio_demo/test
-            preprocess_type = "crop" if quality == "high" else "resize"
-            is_still_mode = True
-            enhancer = False
-            batch_size = 2 if quality == "high" else 4
-            size_of_image = 512 if quality == "high" else 256
-            pose_style = 0
-            facerender = "facevid2vid"
-            exp_weight = 1.0
-            use_ref_video = False
-            ref_video = None
-            ref_info = "pose"
-            use_idle_mode = False
-            length_of_audio = None
-            blink_every = True
-
-            logger.info(f"SadTalker.test args: {image_path}, {audio_path}, {preprocess_type}, {is_still_mode}, {enhancer}, {batch_size}, {size_of_image}, {pose_style}, {facerender}, {exp_weight}, {use_ref_video}, {ref_video}, {ref_info}, {use_idle_mode}, {length_of_audio}, {blink_every}")
-            # Call SadTalker.test() as in the demo
             result = self.sadtalker.test(
                 image_path,
                 audio_path,
@@ -264,21 +272,59 @@ class VideoGenerator:
                 ref_info,
                 use_idle_mode,
                 length_of_audio,
-                blink_every
+                blink_every,
+                result_dir
             )
-            # result is a path to the generated video
-            if isinstance(result, str) and os.path.exists(result):
+            # Find the generated mp4 in result_dir
+            mp4_files = glob.glob(os.path.join(result_dir, "*.mp4"))
+            if result and isinstance(result, str) and os.path.exists(result):
                 shutil.move(result, output_path)
                 logger.info(f"✅ SadTalker generation completed: {output_path}")
                 return True
+            elif mp4_files:
+                shutil.move(mp4_files[0], output_path)
+                logger.info(f"✅ SadTalker generation completed (from result_dir): {output_path}")
+                return True
             else:
                 logger.error(f"SadTalker did not return a valid video path: {result}")
-                return False
-
-        except Exception as e:
-            logger.error(f"❌ SadTalker generation error: {e}")
+        except Exception as api_e:
+            logger.error(f"❌ SadTalker API error: {api_e}")
             logger.error(f"❌ Traceback: {traceback.format_exc()}")
+
+        # --- CLI fallback ---
+        logger.info("⚠️ SadTalker API failed, falling back to CLI usage...")
+        sadtalker_dir = os.path.join(MODELS_DIR, "SadTalker")
+        inference_py = os.path.join(sadtalker_dir, "inference.py")
+        cli_result_dir = os.path.abspath(os.path.join("temp", "sadtalker_cli_results", str(uuid.uuid4())))
+        os.makedirs(cli_result_dir, exist_ok=True)
+
+        cmd = [
+            sys.executable, inference_py,
+            "--driven_audio", audio_path,
+            "--source_image", image_path,
+            "--result_dir", cli_result_dir,
+            "--still",
+            "--preprocess", preprocess_type
+        ]
+        logger.info(f"Running SadTalker CLI: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=sadtalker_dir, timeout=600)
+        logger.info(f"SadTalker CLI stdout: {result.stdout}")
+        logger.info(f"SadTalker CLI stderr: {result.stderr}")
+
+        # Find the generated mp4 in cli_result_dir
+        mp4_files = glob.glob(os.path.join(cli_result_dir, "*.mp4"))
+        if mp4_files:
+            shutil.move(mp4_files[0], output_path)
+            logger.info(f"✅ SadTalker CLI generation completed: {output_path}")
+            return True
+        else:
+            logger.error("❌ SadTalker CLI did not produce a video.")
             return False
+
+    except Exception as e:
+        logger.error(f"❌ SadTalker generation error: {e}")
+        logger.error(f"❌ Traceback: {traceback.format_exc()}")
+        return False
 
     async def generate_video_wav2lip(self, image_path: str, audio_path: str, output_path: str, quality: str = "fast") -> bool:
         """Generate video using Wav2Lip"""

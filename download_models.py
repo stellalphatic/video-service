@@ -127,6 +127,18 @@ def download_sadtalker_models():
          "wav2lip.pth": [
         "https://github.com/Rudrabha/Wav2Lip/releases/download/v1.0/wav2lip.pth",
         "https://huggingface.co/vinthony/SadTalker/resolve/main/wav2lip.pth"
+        ],
+         "mapping_00109-model.pth.tar": [
+            "https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/mapping_00109-model.pth.tar",
+            "https://huggingface.co/vinthony/SadTalker/resolve/main/mapping_00109-model.pth.tar"
+        ],
+        "SadTalker_V0.0.2_256.safetensors": [
+            "https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/SadTalker_V0.0.2_256.safetensors",
+            "https://huggingface.co/vinthony/SadTalker/resolve/main/SadTalker_V0.0.2_256.safetensors"
+        ],
+        "SadTalker_V0.0.2_512.safetensors": [
+            "https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc/SadTalker_V0.0.2_512.safetensors",
+            "https://huggingface.co/vinthony/SadTalker/resolve/main/SadTalker_V0.0.2_512.safetensors"
         ]
     }
     
@@ -259,6 +271,26 @@ def install_additional_dependencies():
     
     logger.info("✅ Additional dependencies installation completed")
 
+
+def download_enhancer_models():
+    """Download enhancer models for GFPGAN and facexlib"""
+    logger.info("🎨 Downloading enhancer models...")
+    gfpgan_weights_dir = os.path.join(MODELS_DIR, "SadTalker", "gfpgan", "weights")
+    os.makedirs(gfpgan_weights_dir, exist_ok=True)
+    enhancer_models = {
+        "alignment_WFLW_4HG.pth": "https://github.com/xinntao/facexlib/releases/download/v0.1.0/alignment_WFLW_4HG.pth",
+        "detection_Resnet50_Final.pth": "https://github.com/xinntao/facexlib/releases/download/v0.1.0/detection_Resnet50_Final.pth",
+        "GFPGANv1.4.pth": "https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.4.pth",
+        "parsing_parsenet.pth": "https://github.com/xinntao/facexlib/releases/download/v0.2.2/parsing_parsenet.pth"
+    }
+    for name, url in enhancer_models.items():
+        path = os.path.join(gfpgan_weights_dir, name)
+        if not os.path.exists(path):
+            download_file(url, path, f"Enhancer {name}")
+        else:
+            logger.info(f"✅ {name} already exists")
+
+
 def main():
     """Main function to download all models"""
     logger.info("🚀 Starting model download process...")
@@ -272,6 +304,8 @@ def main():
         
         # Download Wav2Lip
         wav2lip_success = download_wav2lip_models()
+        # Download enhancer models (GFPGAN, facexlib)
+        download_enhancer_models()
         
         # Create completion marker
         if sadtalker_success or wav2lip_success:
