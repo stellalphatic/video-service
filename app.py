@@ -224,18 +224,19 @@ class VideoGenerator:
             logger.error(f"❌ Failed to load Wav2Lip models: {e}")
             return False
 
-    import glob
+  
 
-async def generate_video_sadtalker(self, image_path, audio_path, output_path, quality="high"):
-    try:
+    async def generate_video_sadtalker(self, image_path, audio_path, output_path, quality="high"):
+      try:
         logger.info("🎭 Generating video with SadTalker (Python API)...")
         if not self.sadtalker:
             logger.error("SadTalker not loaded")
             return False
 
-        preprocess_type = "crop" if quality == "high" else "resize"
+        # preprocess_type = "crop" if quality == "high" else "resize"
+        preprocess_type = "full"
         is_still_mode = True
-        enhancer = False
+        enhancer = "gfpgan"
         batch_size = 2 if quality == "high" else 4
         size_of_image = 512 if quality == "high" else 256
         pose_style = 0
@@ -304,7 +305,8 @@ async def generate_video_sadtalker(self, image_path, audio_path, output_path, qu
             "--source_image", image_path,
             "--result_dir", cli_result_dir,
             "--still",
-            "--preprocess", preprocess_type
+            "--preprocess", preprocess_type,
+            "--enhancer", "gfpgan"
         ]
         logger.info(f"Running SadTalker CLI: {' '.join(cmd)}")
         result = subprocess.run(cmd, capture_output=True, text=True, cwd=sadtalker_dir, timeout=600)
@@ -319,9 +321,11 @@ async def generate_video_sadtalker(self, image_path, audio_path, output_path, qu
             return True
         else:
             logger.error("❌ SadTalker CLI did not produce a video.")
+            logger.error(f"❌ SadTalker CLI stdout: {result.stdout}")
+            logger.error(f"❌ SadTalker CLI stderr: {result.stderr}")
             return False
 
-    except Exception as e:
+      except Exception as e:
         logger.error(f"❌ SadTalker generation error: {e}")
         logger.error(f"❌ Traceback: {traceback.format_exc()}")
         return False
@@ -939,40 +943,49 @@ async def _run_video_generation(task_id: str, image_url: str, audio_url: str, ou
         if sadtalker_available:
             logger.info(f"🎭 Trying SadTalker for task {task_id}")
             video_tasks[task_id]["model_used"] = "SadTalker"
-            result = await video_generator.generate_video_sadtalker(image_path, audio_path, output_path, quality)
-            if result and os.path.exists(output_path):
-                success = True
+            try:
+               result = await video_generator.generate_video_sadtalker(image_path, audio_path, output_path, quality)
+               if result and os.path.exists(output_path):
+                 success = True
+            except Exception as e:
+               logger.error(f"SadTalker failed: {e}")
 
         # 2. Try Wav2Lip if SadTalker failed
         if not success and wav2lip_available:
-            logger.info(f"👄 Trying Wav2Lip for task {task_id}")
-            video_tasks[task_id]["model_used"] = "Wav2Lip"
-            result = await video_generator.generate_video_wav2lip(image_path, audio_path, output_path, quality)
-            # Wait up to 2 seconds for file to appear (handles slow disk flush)
-            for _ in range(10):
-                if os.path.exists(output_path):
-                    logger.info(f"✅ Wav2Lip output file detected: {output_path}")
-                    success = True
-                    break
-                time.sleep(0.2)
-            if not success:
-                logger.error(f"❌ Wav2Lip reported success but output file not found: {output_path}")
+             logger.info(f"👄 Trying Wav2Lip for task {task_id}")
+             video_tasks[task_id]["model_used"] = "Wav2Lip"
+             try:
+               result = await video_generator.generate_video_wav2lip(image_path, audio_path, output_path, quality)
+               for _ in range(10):
+                   if os.path.exists(output_path):
+                     logger.info(f"✅ Wav2Lip output file detected: {output_path}")
+                     success = True
+                     break
+                   time.sleep(0.2)
+               if not success:
+                 logger.error(f"❌ Wav2Lip reported success but output file not found: {output_path}")
+             except Exception as e:
+               logger.error(f"Wav2Lip failed: {e}")
 
         # 3. Fallback to animated
         if not success:
-            logger.info(f"🎬 Falling back to animated video for task {task_id}")
-            video_tasks[task_id]["model_used"] = "Animated"
-            try:
-                create_animated_talking_video(image_path, audio_path, output_path, quality)
-                success = True
-            except Exception as e:
-                logger.error(f"❌ Animated video failed: {e}")
+           logger.info(f"🎬 Falling back to animated video for task {task_id}")
+           video_tasks[task_id]["model_used"] = "Animated"
+           try:
+             create_animated_talking_video(image_path, audio_path, output_path, quality)
+             if os.path.exists(output_path):
+               success = True
+           except Exception as e:
+              logger.error(f"❌ Animated video failed: {e}")
 
         # 4. Fallback to basic
         if not success:
-            logger.info(f"🎬 Falling back to basic video for task {task_id}")
-            video_tasks[task_id]["model_used"] = "Basic"
-            success = video_generator.create_basic_video_with_audio(image_path, audio_path, output_path)
+           logger.info(f"🎬 Falling back to basic video for task {task_id}")
+           video_tasks[task_id]["model_used"] = "Basic"
+           try:
+               success = video_generator.create_basic_video_with_audio(image_path, audio_path, output_path)
+           except Exception as e:
+               logger.error(f"❌ Basic video creation failed: {e}")
 
         if success and os.path.exists(output_path):
             video_tasks[task_id]["status"] = "completed"
@@ -1067,12 +1080,12 @@ async def get_video_status(task_id: str):
         # Check for error file
         error_path = f"temp/errors/{task_id}.json"
         if os.path.exists(error_path):
-            async with aiofiles.open(error_path, 'r') as f:
-                error_data = json.loads(await f.read())
-            return JSONResponse(
-                status_code=500,
-                content={"status": "failed", "error": error_data["error"]}
-            )
+           async with aiofiles.open(error_path, 'r') as f:
+              error_data = json.loads(await f.read())
+           return {
+              "status": "failed",
+              "error": error_data.get("error", "Unknown error")
+             }
 
         # Check task status
         if task_id in video_tasks:
