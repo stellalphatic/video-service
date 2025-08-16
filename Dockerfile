@@ -5,26 +5,31 @@ FROM python:3.8-slim AS builder
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# Install system dependencies needed *only for the build process*
+# Install build-time system dependencies. This is where dlib is compiled.
 RUN apt-get update && apt-get install -y \
-    wget \
-    git \
     build-essential \
+    git \
     cmake \
+    libboost-python-dev \
+    libboost-thread-dev \
+    libopenblas-dev \
+    liblapack-dev \
+    wget \
+    curl \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy and install Python dependencies
+# Copy requirements and install all Python libraries
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Install dlib using a pre-compiled wheel to avoid slow compilation
-RUN pip install --no-cache-dir dlib-bin || \
-    (wget -O dlib.whl https://github.com/davisking/dlib/releases/download/v19.22/dlib-19.22.0-cp38-cp38-manylinux1_x86_64.whl && \
-    pip install --no-cache-dir dlib.whl && \
-    rm dlib.whl)
+# Clone and compile dlib. This is the most time-consuming step.
+RUN git clone --depth 1 https://github.com/davisking/dlib.git && \
+    cd dlib && \
+    python3 setup.py install && \
+    cd .. && \
+    rm -rf dlib
 
 # Download all models to a dedicated directory
 COPY download_models.py .
@@ -57,8 +62,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy only the necessary files from the builder stage
-# This step is the key to a fast push and a small final image.
+# Copy only the necessary files from the builder stage. This is the key.
 COPY --from=builder /usr/local/lib/python3.8/site-packages /usr/local/lib/python3.8/site-packages
 COPY --from=builder /app/models /app/models
 
@@ -67,7 +71,7 @@ COPY app.py .
 COPY requirements.txt .
 COPY download_models.py .
 
-# Create directories and set permissions in a single command
+# Create directories and set permissions
 RUN mkdir -p temp/videos temp/errors temp/avatars temp/streams temp/sadtalker_results temp/wav2lip_results src/config && \
     chmod -R 777 temp && \
     chmod -R 777 models && \
