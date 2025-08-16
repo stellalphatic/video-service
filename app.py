@@ -236,7 +236,7 @@ class VideoGenerator:
         # preprocess_type = "crop" if quality == "high" else "resize"
         preprocess_type = "full"
         is_still_mode = True
-        enhancer = "gfpgan"
+        enhancer = True
         batch_size = 2 if quality == "high" else 4
         size_of_image = 512 if quality == "high" else 256
         pose_style = 0
@@ -368,19 +368,22 @@ class VideoGenerator:
             
             # Wav2Lip inference command
             cmd = [
-                sys.executable, os.path.join(wav2lip_path, "inference.py"),
-                "--checkpoint_path", model_path,
-                "--face", image_path,
-                "--audio", audio_path,
-                "--outfile", output_path,
-                "--fps", "25",
-                "--pads", "0", "10", "0", "0",
-                "--face_det_batch_size", "4",
-                "--wav2lip_batch_size", "8" if quality == "fast" else "4"
+            sys.executable, os.path.join(wav2lip_path, "inference.py"),
+            "--checkpoint_path", model_path,
+            "--face", image_path,
+            "--audio", audio_path,
+            "--outfile", output_path,
+            "--fps", "25",
+            "--pads", "0", "10", "0", "0",
+            "--face_det_batch_size", "2",
+            "--wav2lip_batch_size", "2"
             ]
             
-            if quality == "fast":
-                cmd.append("--static")
+            # if quality == "fast":
+            #     cmd.append("--static")
+
+             # Add --resize_factor 1 for no downscaling (optional)
+             # cmd += ["--resize_factor", "1"]
             
             logger.info(f"🚀 Running Wav2Lip: {' '.join(cmd)}")
             
