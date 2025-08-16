@@ -1,37 +1,38 @@
-# Stage 1: The Builder(for heavy lifting)
+# Stage 1: The Builder (for heavy lifting)
 FROM python:3.8-slim AS builder
+
+# Set up environment variables
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
 # Install system dependencies needed *only for the build process*
 RUN apt-get update && apt-get install -y \
-    build-essential \
-    git \
-    cmake \
-    libboost-python-dev \
-    libboost-thread-dev \
-    libopenblas-dev \
-    liblapack-dev \
     wget \
-    curl \
+    git \
+    build-essential \
+    cmake \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy requirements and install all Python libraries
+# Copy and install Python dependencies
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# Clone and compile dlib. This is the most time-consuming step.
-RUN git clone --depth 1 https://github.com/davisking/dlib.git && \
-    cd dlib && \
-    python3 setup.py install && \
-    cd .. && \
-    rm -rf dlib
+# Install dlib using a pre-compiled wheel to avoid slow compilation
+RUN pip install --no-cache-dir dlib-bin || \
+    (wget -O dlib.whl https://github.com/davisking/dlib/releases/download/v19.22/dlib-19.22.0-cp38-cp38-manylinux1_x86_64.whl && \
+    pip install --no-cache-dir dlib.whl && \
+    rm dlib.whl)
 
 # Download all models to a dedicated directory
 COPY download_models.py .
 RUN python download_models.py
 
+# ---
 # Stage 2: The Final (lightweight) Image
+# ---
 FROM python:3.8-slim
 
 # Set up runtime environment variables
@@ -73,7 +74,7 @@ RUN mkdir -p temp/videos temp/errors temp/avatars temp/streams temp/sadtalker_re
     cp -r /app/models/SadTalker/src/config/* /app/src/config/ && \
     cp -r /app/models/SadTalker/checkpoints /app/checkpoints
 
-# Create and switch to a non-root user
+# Create and switch to a non-root user for security
 RUN useradd -m appuser && \
     chown -R appuser:appuser /app
 USER appuser
