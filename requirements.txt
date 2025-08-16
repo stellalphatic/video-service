@@ -1,3 +1,4 @@
+# Core dependencies with fixed versions
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 websockets==12.0
@@ -7,32 +8,38 @@ requests==2.31.0
 numpy==1.24.3
 opencv-python==4.8.1.78
 Pillow==10.0.1
-torch==2.0.1
-torchvision==0.15.2
-torchaudio==2.0.2
+
+# PyTorch with CUDA support (for Python 3.8)
+torch==1.12.1+cu113
+torchvision==0.13.1+cu113
+torchaudio==0.12.1+cu113
+
+# ML dependencies
 mediapipe==0.10.7
 librosa==0.9.2
-soundfile==0.12.1
-resampy==0.4.2
-scikit-image==0.21.0
-scipy==1.11.4
+face-alignment==1.3.5
+dlib==19.24.0
+yacs==0.1.8
+
+# Image processing
+scikit-image==0.19.3
+scipy==1.9.3
 matplotlib==3.7.2
 imageio==2.31.5
-imageio-ffmpeg==0.4.9
 ffmpeg-python==0.2.0
-face-alignment==1.3.5
-yacs==0.1.8
-pydub==0.25.1
-safetensors==0.4.0
-transformers==4.35.0
+
+# SadTalker requirements
+safetensors==0.3.2
+transformers==4.30.2
 diffusers==0.21.4
-accelerate==0.24.1
-xformers==0.0.22
-pydantic
+accelerate==0.23.0
+xformers==0.0.20
 kornia==0.7.0
 einops==0.7.0
 omegaconf==2.3.0
-basicsr==1.4.2
+
+# Video enhancement
 gfpgan==1.3.8
 realesrgan==0.3.0
-# dlib==19.24.2
+basicsr==1.4.2
+facexlib==0.3.0

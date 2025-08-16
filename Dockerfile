@@ -1,13 +1,27 @@
-FROM python:3.10-slim
+FROM python:3.8-slim
+
+# Set production environment
+ENV NODE_ENV=production
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PORT=8000
+ENV MODELS_DIR=/app/models
+ENV TEMP_DIR=/app/temp
+ENV PYTHONPATH="/app:/app/models/SadTalker:${PYTHONPATH}"
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
-    cmake \
     git \
+    gcc \
+    g++ \
     wget \
+    make \
+    cmake \
     curl \
     ffmpeg \
+    python3-dev \
+    libgl1-mesa-glx \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
@@ -21,65 +35,70 @@ RUN apt-get update && apt-get install -y \
     libboost-all-dev \
     libopenblas-dev \
     liblapack-dev \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /app
 
-# Set environment variables
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PORT=8000
-ENV MODELS_DIR=/app/models
-ENV TEMP_DIR=/app/temp
-
-# Copy requirements first for better caching
+# Copy requirements first
 COPY requirements.txt .
 
-# Install Python dependencies
+# Install Python dependencies with version pinning
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-
-
-# RUN pip install --no-cache-dir dlib-bin==19.24.2 || \
-#     (curl -L -o dlib.whl https://github.com/davisking/dlib/releases/download/v19.24.2/dlib-19.24.2-cp310-cp310-manylinux_2_17_x86_64.whl && \
-#     pip install --no-cache-dir dlib.whl && \
-#     rm dlib.whl)
-
-RUN git clone https://github.com/davisking/dlib.git && \
+# Install dlib
+RUN git clone --depth 1 https://github.com/davisking/dlib.git && \
     cd dlib && \
     python3 setup.py install && \
     cd .. && \
     rm -rf dlib
 
-# Copy model download script
+# Copy only necessary files
 COPY download_models.py .
-
-# Download models during build (this runs once)
-RUN python download_models.py
-
-# Create symlink for SadTalker checkpoints
-RUN ln -s /app/models/SadTalker/checkpoints /app/checkpoints
-
-# copying config files from sadtalker folder to root folder doing by symlink and below that by simply copying
-RUN mkdir -p /app/src && \
-    ln -s /app/models/SadTalker/src/config /app/src/config
-# RUN mkdir -p /app/src/config && \
-#     cp -r /app/models/SadTalker/src/config/* /app/src/config/
-
-# Copy application code
 COPY app.py .
 
-# Create necessary directories
-RUN mkdir -p temp/videos temp/errors temp/avatars temp/streams
+# Download models and set up directories
+RUN python download_models.py && \
+    mkdir -p temp/videos \
+             temp/errors \
+             temp/avatars \
+             temp/streams \
+             temp/sadtalker_results \
+             temp/wav2lip_results \
+             src/config && \
+    chmod -R 777 temp && \
+    chmod -R 777 models
+
+# Set up SadTalker paths (use copying instead of symlinks for Cloud Run)
+RUN cp -r /app/models/SadTalker/src/config/* /app/src/config/ && \
+    cp -r /app/models/SadTalker/checkpoints /app/checkpoints
+
+# Non-root user for security
+RUN useradd -m appuser && \
+    chown -R appuser:appuser /app
+USER appuser
 
 # Expose port
 EXPOSE 8000
 
-# Health check with longer timeout for startup
+# Configure uvicorn for production
+ENV WORKERS=2
+ENV TIMEOUT=300
+ENV MAX_REQUESTS=1000
+ENV MAX_REQUESTS_JITTER=50
+
+# Health check
 HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# Run the application with uvicorn
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# Production-ready uvicorn configuration
+CMD ["uvicorn", \
+     "app:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--workers", "2", \
+     "--timeout-keep-alive", "75", \
+     "--limit-max-requests", "1000", \
+     "--proxy-headers", \
+     "--forwarded-allow-ips", "*"]
