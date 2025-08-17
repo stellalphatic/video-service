@@ -74,6 +74,8 @@ RUN mkdir -p /app/src && \
 #     cp -r /app/models/SadTalker/src/config/* /app/src/config/
 
    
+COPY job_runner.py .
+
 # Copy application code
 COPY app.py .
 
