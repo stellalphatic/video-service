@@ -31,6 +31,15 @@ import mediapipe as mp
 import glob
 
 
+from google.cloud import pubsub_v1 #Import Pub/Sub client
+# Initialize Pub/Sub publisher
+# You can set this as an environment variable in Cloud Run
+PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT") 
+# You will create this topic in the console later
+VIDEO_GEN_TOPIC = "video-generation-tasks" 
+publisher = pubsub_v1.PublisherClient()
+topic_path = publisher.topic_path(PROJECT_ID, VIDEO_GEN_TOPIC)
+
 sys.path.insert(0, "/app/models/SadTalker")
 from src.gradio_demo import SadTalker
 
@@ -1042,7 +1051,6 @@ async def _download_file(url: str, local_path: str):
 # --- HTTP Endpoints ---
 @app.post("/generate-video", dependencies=[Depends(verify_api_key)])
 async def generate_video(
-    background_tasks: BackgroundTasks,
     image_url: str = Form(...),
     audio_url: str = Form(...),
     quality: str = Form(default="fast")):
@@ -1052,25 +1060,30 @@ async def generate_video(
 
     # Generate task ID
     task_id = str(uuid.uuid4())
+    
+    # NEW: Package the task details into a message
+    message_data = {
+        "task_id": task_id,
+        "image_url": image_url,
+        "audio_url": audio_url,
+        "quality": quality,
+        # We also need the output directory for the job
+        "output_dir": "temp/videos" 
+    }
+    
+    # NEW: Publish the message to the Pub/Sub topic
+    # The message data must be a byte string
+    future = publisher.publish(topic_path, json.dumps(message_data).encode("utf-8"))
+    logger.info(f"✅ Published task {task_id} to Pub/Sub with message ID: {future.result()}")
 
-    # Initialize task
+    # Initialize task status (before the work starts)
     video_tasks[task_id] = {
         "status": "queued",
         "created_at": time.time(),
         "quality": quality,
         "model_used": "Unknown"
     }
-
-    # Start background video generation
-    background_tasks.add_task(
-        _run_video_generation,
-        task_id,
-        image_url,
-        audio_url,
-        "temp/videos",
-        quality
-    )
-
+    
     return {
         "task_id": task_id,
         "status": "queued",
