@@ -73,8 +73,6 @@ RUN mkdir -p /app/src && \
 # RUN mkdir -p /app/src/config && \
 #     cp -r /app/models/SadTalker/src/config/* /app/src/config/
 
-   
-COPY job_runner.py .
 
 # Copy application code
 COPY app.py .

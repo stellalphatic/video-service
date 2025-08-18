@@ -31,14 +31,23 @@ import mediapipe as mp
 import glob
 
 
-from google.cloud import pubsub_v1 #Import Pub/Sub client
-# Initialize Pub/Sub publisher
-# You can set this as an environment variable in Cloud Run
-PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT") 
-# You will create this topic in the console later
-VIDEO_GEN_TOPIC = "video-generation-tasks" 
+from google.cloud import pubsub_v1
+from google.oauth2 import id_token
+from google.auth.transport import requests as grequests
+# ----------------- ENV / PubSub / config -----------------
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")  # required
+VIDEO_GEN_TOPIC = os.getenv("VIDEO_GEN_TOPIC", "video-generation")  # must match backend publishing
+PUBSUB_PUSH_AUDIENCE = os.getenv("PUBSUB_PUSH_AUDIENCE")  # set to the full push URL e.g. https://<url>/pubsub-handler
+BACKEND_CALLBACK_URL = os.getenv("BACKEND_CALLBACK_URL")  # full url to backend callback, e.g. https://api.example.com/api/video/callback
+WORKER_TOKEN = os.getenv("WORKER_TOKEN")  # shared secret between backend & worker
+CALLBACK_MAX_BYTES = int(os.getenv("CALLBACK_MAX_BYTES", str(28 * 1024 * 1024)))  # 28 MiB safe default
+
+# Pub/Sub publisher (used by /generate-video)
+if not PROJECT_ID:
+    logger.warning("GOOGLE_CLOUD_PROJECT env var is not set. Pub/Sub publish will likely fail.")
 publisher = pubsub_v1.PublisherClient()
 topic_path = publisher.topic_path(PROJECT_ID, VIDEO_GEN_TOPIC)
+
 
 sys.path.insert(0, "/app/models/SadTalker")
 from src.gradio_demo import SadTalker
@@ -955,6 +964,16 @@ def simple_audio_analysis(audio_path: str, frame_rate: int) -> dict:
 
 # --- Background Task Functions ---
 async def _run_video_generation(task_id: str, image_url: str, audio_url: str, output_dir: str, quality: str):
+    """
+    This preserves your SadTalker / Wav2Lip / Animated / Basic fallback logic, with these fixes:
+    - ensures video_tasks[task_id] exists even if the instance that published the message was different
+    - uses async downloads
+    - uses await asyncio.sleep instead of time.sleep
+    - calls send_callback(...) on processing/completed/failed
+    """
+    # ensure the in-memory task exists in this instance
+    video_tasks.setdefault(task_id, {"status": "queued", "created_at": time.time(), "quality": quality, "model_used": "Unknown"})
+
     temp_dir = tempfile.mkdtemp()
     try:
         logger.info(f"🎬 Starting video generation for task {task_id}")
@@ -962,64 +981,71 @@ async def _run_video_generation(task_id: str, image_url: str, audio_url: str, ou
         audio_path = os.path.join(temp_dir, "input.wav")
         output_path = os.path.abspath(os.path.join(output_dir, f"{task_id}.mp4"))
 
+        # Notify backend we started processing
+        video_tasks[task_id]["status"] = "processing"
+        send_callback(task_id, "processing")
+
+        # Async download
         await _download_file(image_url, image_path)
         await _download_file(audio_url, audio_path)
 
-        video_tasks[task_id]["status"] = "processing"
         success = False
 
-        # 1. Try SadTalker
+        # 1. SadTalker
         if sadtalker_available:
             logger.info(f"🎭 Trying SadTalker for task {task_id}")
             video_tasks[task_id]["model_used"] = "SadTalker"
             try:
-               result = await video_generator.generate_video_sadtalker(image_path, audio_path, output_path, quality)
-               if result and os.path.exists(output_path):
-                 success = True
+                result = await video_generator.generate_video_sadtalker(image_path, audio_path, output_path, quality)
+                if result and os.path.exists(output_path):
+                    success = True
             except Exception as e:
-               logger.error(f"SadTalker failed: {e}")
+                logger.error(f"SadTalker failed: {e}")
 
-        # 2. Try Wav2Lip if SadTalker failed
+        # 2. Wav2Lip fallback
         if not success and wav2lip_available:
-             logger.info(f"👄 Trying Wav2Lip for task {task_id}")
-             video_tasks[task_id]["model_used"] = "Wav2Lip"
-             try:
-               result = await video_generator.generate_video_wav2lip(image_path, audio_path, output_path, quality)
-               for _ in range(10):
-                   if os.path.exists(output_path):
-                     logger.info(f"✅ Wav2Lip output file detected: {output_path}")
-                     success = True
-                     break
-                   time.sleep(0.2)
-               if not success:
-                 logger.error(f"❌ Wav2Lip reported success but output file not found: {output_path}")
-             except Exception as e:
-               logger.error(f"Wav2Lip failed: {e}")
+            logger.info(f"👄 Trying Wav2Lip for task {task_id}")
+            video_tasks[task_id]["model_used"] = "Wav2Lip"
+            try:
+                result = await video_generator.generate_video_wav2lip(image_path, audio_path, output_path, quality)
+                for _ in range(10):
+                    if os.path.exists(output_path):
+                        logger.info(f"✅ Wav2Lip output file detected: {output_path}")
+                        success = True
+                        break
+                    await asyncio.sleep(0.2)
+                if not success:
+                    logger.error(f"❌ Wav2Lip reported success but output file not found: {output_path}")
+            except Exception as e:
+                logger.error(f"Wav2Lip failed: {e}")
 
-        # 3. Fallback to animated
+        # 3. Animated fallback
         if not success:
-           logger.info(f"🎬 Falling back to animated video for task {task_id}")
-           video_tasks[task_id]["model_used"] = "Animated"
-           try:
-             create_animated_talking_video(image_path, audio_path, output_path, quality)
-             if os.path.exists(output_path):
-               success = True
-           except Exception as e:
-              logger.error(f"❌ Animated video failed: {e}")
+            logger.info(f"🎬 Falling back to animated video for task {task_id}")
+            video_tasks[task_id]["model_used"] = "Animated"
+            try:
+                create_animated_talking_video(image_path, audio_path, output_path, quality)
+                if os.path.exists(output_path):
+                    success = True
+            except Exception as e:
+                logger.error(f"❌ Animated video failed: {e}")
 
-        # 4. Fallback to basic
+        # 4. Basic fallback
         if not success:
-           logger.info(f"🎬 Falling back to basic video for task {task_id}")
-           video_tasks[task_id]["model_used"] = "Basic"
-           try:
-               success = video_generator.create_basic_video_with_audio(image_path, audio_path, output_path)
-           except Exception as e:
-               logger.error(f"❌ Basic video creation failed: {e}")
+            logger.info(f"🎬 Falling back to basic video for task {task_id}")
+            video_tasks[task_id]["model_used"] = "Basic"
+            try:
+                success = video_generator.create_basic_video_with_audio(image_path, audio_path, output_path)
+            except Exception as e:
+                logger.error(f"❌ Basic video creation failed: {e}")
 
+        # Finalize
         if success and os.path.exists(output_path):
             video_tasks[task_id]["status"] = "completed"
             video_tasks[task_id]["output_path"] = output_path
             logger.info(f"✅ Video generation completed for task {task_id} using {video_tasks[task_id]['model_used']}")
+            # Send file back to backend (if small enough) else notify failure unless you configure SUPABASE upload
+            send_callback(task_id, "completed", file_path=output_path)
         else:
             raise Exception("All video generation methods failed or output file missing")
 
@@ -1027,63 +1053,65 @@ async def _run_video_generation(task_id: str, image_url: str, audio_url: str, ou
         logger.error(f"❌ Video generation failed for task {task_id}: {e}")
         video_tasks[task_id]["status"] = "failed"
         video_tasks[task_id]["error"] = str(e)
+        send_callback(task_id, "failed", error=str(e))
         # Write error file so /video-status can return failure
         error_path = f"temp/errors/{task_id}.json"
+        os.makedirs(os.path.dirname(error_path), exist_ok=True)
         with open(error_path, "w") as f:
             json.dump({"status": "failed", "error": str(e)}, f)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-async def _download_file(url: str, local_path: str):
-    """Download file from URL"""
+# ---------- helper: async download (non-blocking) ----------
+async def _download_file(url: str, local_path: str, timeout=60):
+    """Async download using httpx to avoid blocking event loop."""
     try:
         logger.info(f"📥 Downloading {url}")
-        response = requests.get(url, stream=True, timeout=60)
-        response.raise_for_status()
-        with open(local_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.get(url)
+            r.raise_for_status()
+            with open(local_path, "wb") as f:
+                f.write(r.content)
         logger.info(f"✅ Downloaded {url} to {local_path}")
     except Exception as e:
         logger.error(f"❌ Error downloading {url}: {e}")
         raise
 
 # --- HTTP Endpoints ---
+# ------------ generate-video endpoint (publishes pubsub message) ------------
 @app.post("/generate-video", dependencies=[Depends(verify_api_key)])
 async def generate_video(
     image_url: str = Form(...),
     audio_url: str = Form(...),
     quality: str = Form(default="fast")):
-    """Generate video from image and audio URLs."""
+    """Publish a job to Pub/Sub and return task_id."""
+    # If your code needs check_models, keep it
     if not models_loaded:
         await check_models()
 
-    # Generate task ID
     task_id = str(uuid.uuid4())
-    
-    # NEW: Package the task details into a message
     message_data = {
         "task_id": task_id,
         "image_url": image_url,
         "audio_url": audio_url,
         "quality": quality,
-        # We also need the output directory for the job
-        "output_dir": "temp/videos" 
+        "output_dir": "temp/videos"
     }
-    
-    # NEW: Publish the message to the Pub/Sub topic
-    # The message data must be a byte string
-    future = publisher.publish(topic_path, json.dumps(message_data).encode("utf-8"))
-    logger.info(f"✅ Published task {task_id} to Pub/Sub with message ID: {future.result()}")
+    try:
+        future = publisher.publish(topic_path, json.dumps(message_data).encode("utf-8"))
+        message_id = future.result()
+        logger.info(f"✅ Published task {task_id} to Pub/Sub message ID {message_id}")
+    except Exception as e:
+        logger.error(f"Failed to publish to Pub/Sub: {e}")
+        return JSONResponse(status_code=500, content={"error": "failed to enqueue task"})
 
-    # Initialize task status (before the work starts)
     video_tasks[task_id] = {
         "status": "queued",
         "created_at": time.time(),
         "quality": quality,
         "model_used": "Unknown"
     }
-    
+
     return {
         "task_id": task_id,
         "status": "queued",
@@ -1097,40 +1125,27 @@ async def generate_video(
         }
     }
 
+# ---------- /video-status remains as-is (serves file if present) ----------
 @app.get("/video-status/{task_id}")
 async def get_video_status(task_id: str):
-    """Get video generation status."""
-    # Check if video file exists
     video_path = f"temp/videos/{task_id}.mp4"
     if os.path.exists(video_path):
-        # Return the video file
-        return FileResponse(
-            video_path,
-            media_type="video/mp4",
-            filename=f"{task_id}.mp4"
-        )
-    else:
-        # Check for error file
-        error_path = f"temp/errors/{task_id}.json"
-        if os.path.exists(error_path):
-           async with aiofiles.open(error_path, 'r') as f:
-              error_data = json.loads(await f.read())
-           return {
-              "status": "failed",
-              "error": error_data.get("error", "Unknown error")
-             }
-
-        # Check task status
-        if task_id in video_tasks:
-            task_info = video_tasks[task_id].copy()
-            return {
-                "status": task_info["status"],
-                "model_used": task_info.get("model_used", "Unknown"),
-                "quality": task_info.get("quality", "unknown"),
-                "created_at": task_info.get("created_at", 0)
-            }
-        else:
-            return {"status": "not_found"}
+        return FileResponse(video_path, media_type="video/mp4", filename=f"{task_id}.mp4")
+    # errors
+    error_path = f"temp/errors/{task_id}.json"
+    if os.path.exists(error_path):
+        async with aiofiles.open(error_path, 'r') as f:
+            error_data = json.loads(await f.read())
+        return {"status": "failed", "error": error_data.get("error", "Unknown error")}
+    if task_id in video_tasks:
+        task_info = video_tasks[task_id].copy()
+        return {
+            "status": task_info["status"],
+            "model_used": task_info.get("model_used", "Unknown"),
+            "quality": task_info.get("quality", "unknown"),
+            "created_at": task_info.get("created_at", 0)
+        }
+    return {"status": "not_found"}
 
 @app.post("/init-stream", dependencies=[Depends(verify_api_key)])
 async def init_stream(request: Request):
@@ -1476,6 +1491,105 @@ async def root():
             "health": "/health"
         }
     }
+
+
+# ---------- helper: send callback to backend ----------
+def send_callback(task_id: str, status: str, file_path: Optional[str] = None, url: Optional[str] = None, error: Optional[str] = None):
+    """
+    Send status to backend.
+    - If `file_path` provided and size <= CALLBACK_MAX_BYTES, will send as multipart/form-data with field 'file' (req.file on backend)
+    - If `url` provided, will POST JSON {task_id, status, url}
+    - If both file_path and url provided, file_path sending takes precedence.
+    - Deletes the local file on successful callback.
+    """
+    headers = {"Authorization": f"Bearer {WORKER_TOKEN}"} if WORKER_TOKEN else {}
+    file_uploaded = False
+
+    try:
+        if file_path and status == "completed":
+            try:
+                size = os.path.getsize(file_path)
+            except Exception:
+                size = None
+
+            if size and size > CALLBACK_MAX_BYTES:
+                # File too big to POST back to backend safely.
+                # Inform backend of failure OR provide alternative.
+                payload = {"task_id": task_id, "status": "failed", "error": f"output file {size} bytes exceeds callback limit ({CALLBACK_MAX_BYTES})"}
+                logger.error(f"[CALLBACK] file too large to send back ({size} bytes). Notifying backend of failure.")
+                requests.post(BACKEND_CALLBACK_URL, headers=headers, json=payload, timeout=30)
+                return
+
+            # safe to upload
+            with open(file_path, "rb") as f:
+                files = {"file": (os.path.basename(file_path), f, "video/mp4")}
+                data = {"task_id": task_id, "status": status}
+                if error:
+                    data["error"] = error
+                r = requests.post(BACKEND_CALLBACK_URL, headers=headers, data=data, files=files, timeout=1200)
+                r.raise_for_status()
+                logger.info(f"[CALLBACK] file POSTed for {task_id}, status code {r.status_code}")
+                file_uploaded = True  # Set flag to indicate successful upload
+                return
+
+        # else if url provided, send JSON
+        if url:
+            payload = {"task_id": task_id, "status": status, "url": url}
+            if error:
+                payload["error"] = error
+            r = requests.post(BACKEND_CALLBACK_URL, headers=headers, json=payload, timeout=30)
+            r.raise_for_status()
+            logger.info(f"[CALLBACK] url POSTed for {task_id}, status code {r.status_code}")
+            return
+
+        # if no file and no url, send a small JSON status
+        payload = {"task_id": task_id, "status": status}
+        if error:
+            payload["error"] = error
+        r = requests.post(BACKEND_CALLBACK_URL, headers=headers, json=payload, timeout=30)
+        r.raise_for_status()
+        logger.info(f"[CALLBACK] status POSTed for {task_id}, status code {r.status_code}")
+        
+    except Exception as e:
+        logger.error(f"[CALLBACK] Failed to notify backend for {task_id}: {e}")
+    finally:
+        # Delete the local video file if it was successfully uploaded
+        if file_uploaded and file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                logger.info(f"✅ Successfully deleted local file: {file_path}")
+            except Exception as e:
+                logger.error(f"❌ Failed to delete local file {file_path}: {e}")
+
+# ---------- PUBSUB push receiver (must verify OIDC token) ----------
+@app.post("/pubsub-handler")
+async def pubsub_handler(request: Request):
+    # Verify OIDC token from Pub/Sub push (Authorization: Bearer <token>)
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        logger.warning("Missing Bearer token on pubsub push")
+        return JSONResponse(status_code=401, content={"error": "missing bearer token"})
+    token = auth_header.split(" ", 1)[1]
+    if not PUBSUB_PUSH_AUDIENCE:
+        logger.warning("PUBSUB_PUSH_AUDIENCE not set; skipping token verification (not recommended).")
+    else:
+        try:
+            id_info = id_token.verify_oauth2_token(token, grequests.Request(), audience=PUBSUB_PUSH_AUDIENCE)
+            # optional: validate id_info['email'] or issuer if desired
+        except Exception as e:
+            logger.error(f"Pub/Sub push token verification failed: {e}")
+            return JSONResponse(status_code=403, content={"error": "invalid token"})
+
+    envelope = await request.json()
+    msg = envelope.get("message")
+    if not msg:
+        return JSONResponse(status_code=400, content={"error": "no message"})
+    payload = json.loads(base64.b64decode(msg["data"]).decode("utf-8"))
+    task_id = payload["task_id"]
+    # schedule job async (acknowledge quickly)
+    asyncio.create_task(_run_video_generation(task_id, payload["image_url"], payload["audio_url"], payload.get("output_dir", "temp/videos"), payload.get("quality", "fast")))
+    return {"status": "ok"}
+
 
 if __name__ == "__main__":
     uvicorn.run(
