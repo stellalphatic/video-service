@@ -41,6 +41,15 @@ logger = logging.getLogger(__name__)
 
 # --- Global Configuration ---
 app = FastAPI(title="Professional Avatar Video Service", version="4.0.0")
+
+# Add GPU optimization after FastAPI app initialization
+if torch.cuda.is_available():
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.enabled = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
+
+
 executor = ThreadPoolExecutor(max_workers=6)
 video_tasks: Dict[str, dict] = {}
 active_streams: Dict[str, dict] = {}
@@ -307,13 +316,24 @@ class VideoGenerator:
             "--result_dir", result_dir,
             "--still",
             "--preprocess", "full",
-            "--enhancer", "gfpgan"
+            "--enhancer", "gfpgan",
+            "--batch_size", "32",  # Increase batch size for GPU
+            "--cpu_workers", "8",  # More CPU workers
+            "--size", "512" if quality == "high" else "256",
+            "--no_smooth",
+            "--face_det_batch_size", "8"
         ]
 
-        if quality == "high":
-            cmd.extend(["--size", "512"])
 
         logger.info(f"Running command: {' '.join(cmd)}")
+        env = {
+            **os.environ,
+            'PYTHONPATH': f"{sadtalker_dir}:{os.environ.get('PYTHONPATH', '')}",
+            'CUDA_VISIBLE_DEVICES': '0',
+            'CUDA_LAUNCH_BLOCKING': '0',
+            'OMP_NUM_THREADS': '8',
+            'MKL_NUM_THREADS': '8'
+        }
 
         try:
             result = subprocess.run(
@@ -321,8 +341,8 @@ class VideoGenerator:
                 capture_output=True,
                 text=True,
                 cwd=sadtalker_dir,
-                timeout=600,
-                env={**os.environ, 'PYTHONPATH': f"{sadtalker_dir}:{os.environ.get('PYTHONPATH', '')}"}
+                timeout=1200, #20 minutes timeotu
+                env=env
             )
 
             logger.info(f"SadTalker stdout: {result.stdout}")
@@ -404,7 +424,7 @@ class VideoGenerator:
             capture_output=True,
             text=True,
             cwd=wav2lip_path,
-            timeout=600,
+            timeout=1000,
             env={**os.environ, 'PYTHONPATH': wav2lip_path}
         )
 
@@ -515,6 +535,11 @@ async def check_models():
 
 @app.on_event("startup")
 async def startup_event():
+    if torch.cuda.is_available():
+        # Allocate memory once on startup
+        torch.cuda.empty_cache()
+        torch.cuda.memory.empty_cache()
+        torch.cuda.set_per_process_memory_fraction(0.95)  # Use 95% of GPU memory
     """Load models on startup"""
     logger.info("🚀 Starting Professional Avatar Video Service...")
     await check_models()
@@ -1053,22 +1078,7 @@ async def generate_video(
 
     # Generate task ID
     task_id = str(uuid.uuid4())
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    
     # Initialize task
     video_tasks[task_id] = {
         "status": "queued",
