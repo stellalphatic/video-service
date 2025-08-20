@@ -323,7 +323,6 @@ class VideoGenerator:
             "--preprocess", "full",
             "--enhancer", "gfpgan",
             "--size", "512" if quality == "high" else "256"
-             "--batch_size", "32",  # Increased batch size for GPU
             
         ]
 
@@ -393,46 +392,46 @@ class VideoGenerator:
             logger.error(f"Cleanup error: {e}")
 
     async def generate_video_wav2lip(self, image_path: str, audio_path: str, output_path: str, quality: str = "high") -> bool:
-     """Generate video using Wav2Lip with improved quality and portrait image handling"""
+     """Generate video using Wav2Lip with improved quality and GFPGAN enhancement"""
      try:
         logger.info("🎤 Generating video with Wav2Lip...")
 
-        # Process input image for better quality
+        # Process input image
         img = cv2.imread(image_path)
         if img is None:
             logger.error("❌ Failed to read input image")
             return False
 
-        # Handle portrait images better
+        # Handle portrait images
         height, width = img.shape[:2]
         if height > width:
-            # For portrait images, add padding to make it square
             diff = height - width
             pad_left = diff // 2
             pad_right = diff - pad_left
             img = cv2.copyMakeBorder(img, 0, 0, pad_left, pad_right, cv2.BORDER_REPLICATE)
 
-        # Save processed image
         processed_image = image_path.replace('.', '_processed.')
         cv2.imwrite(processed_image, img)
 
         wav2lip_path = os.path.join(MODELS_DIR, "Wav2Lip")
         model_path = os.path.join(wav2lip_path, "checkpoints", "wav2lip_gan.pth")
 
-        # High quality settings
+        # Generate initial video with Wav2Lip
+        temp_output = output_path.replace('.mp4', '_temp.mp4')
+        
         cmd = [
             sys.executable,
             os.path.join(wav2lip_path, "inference.py"),
             "--checkpoint_path", model_path,
             "--face", processed_image,
             "--audio", audio_path,
-            "--outfile", output_path,
+            "--outfile", temp_output,
             "--fps", "25",
-            "--pads", "0", "20", "0", "0",  # Adjusted padding for better face detection
-            "--face_det_batch_size", "4",
-            "--wav2lip_batch_size", "8",
-            "--resize_factor", "1",  # No downscaling
-            "--nosmooth"  # Disable temporal smoothing for sharper output
+            "--pads", "0", "20", "0", "0",
+            "--face_det_batch_size", "8" if quality == "high" else "4",
+            "--wav2lip_batch_size", "16" if quality == "high" else "8",
+            "--resize_factor", "1",
+            "--nosmooth"
         ]
 
         logger.info(f"Running Wav2Lip command: {' '.join(cmd)}")
@@ -442,33 +441,104 @@ class VideoGenerator:
             capture_output=True,
             text=True,
             cwd=wav2lip_path,
-            timeout=1000,
+            timeout=1800,
             env={**os.environ, 'PYTHONPATH': wav2lip_path}
         )
 
-        if os.path.exists(output_path):
-            # Enhance output video quality
-            temp_output = output_path.replace('.mp4', '_enhanced.mp4')
-            ffmpeg_cmd = [
-                'ffmpeg', '-i', output_path,
-                '-c:v', 'libx264',
-                '-preset', 'slow',
-                '-crf', '18',  # High quality (lower is better, 18-28 is good range)
-                '-c:a', 'aac',
-                '-b:a', '192k',
-                temp_output
-            ]
-
-            subprocess.run(ffmpeg_cmd, capture_output=True)
-            shutil.move(temp_output, output_path)
-
-            logger.info(f"✅ Wav2Lip generation completed with enhanced quality: {output_path}")
-            return True
-        else:
+        if not os.path.exists(temp_output):
             logger.error("❌ Wav2Lip failed to generate video")
-            logger.error(f"stdout: {result.stdout}")
-            logger.error(f"stderr: {result.stderr}")
             return False
+
+        # Enhance video quality if high quality requested
+        if quality == "high":
+            logger.info("🎨 Enhancing video quality with GFPGAN...")
+            
+            # Import GFPGAN
+            try:
+                from gfpgan import GFPGANer
+                from basicsr.archs.rrdbnet_arch import RRDBNet
+                
+                # Initialize GFPGAN
+                gfpgan_model = GFPGANer(
+                    model_path='/app/models/GFPGan/GFPGANv1.4.pth',
+                    upscale=1,
+                    arch='clean',
+                    channel_multiplier=2,
+                    bg_upsampler=None
+                )
+
+                # Process video frames with GFPGAN
+                cap = cv2.VideoCapture(temp_output)
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                
+                # Initialize video writer
+                writer = cv2.VideoWriter(
+                    output_path,
+                    cv2.VideoWriter_fourcc(*'mp4v'),
+                    fps,
+                    (width, height)
+                )
+
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                        
+                    # Enhance frame
+                    _, _, enhanced = gfpgan_model.enhance(
+                        frame,
+                        has_aligned=False,
+                        only_center_face=False,
+                        paste_back=True
+                    )
+                    
+                    writer.write(enhanced)
+
+                cap.release()
+                writer.release()
+
+                # Convert to H.264 for web compatibility
+                final_output = output_path.replace('.mp4', '_final.mp4')
+                subprocess.run([
+                    'ffmpeg', '-i', output_path,
+                    '-i', audio_path,
+                    '-c:v', 'libx264',
+                    '-preset', 'slow',
+                    '-crf', '18',
+                    '-c:a', 'aac',
+                    '-b:a', '192k',
+                    final_output
+                ], check=True)
+                
+                shutil.move(final_output, output_path)
+                logger.info("✨ Video enhancement completed")
+
+            except Exception as e:
+                logger.error(f"⚠️ Enhancement failed, using original output: {e}")
+                shutil.move(temp_output, output_path)
+        else:
+            # For non-high quality, just use basic ffmpeg enhancement
+            subprocess.run([
+                'ffmpeg', '-i', temp_output,
+                '-i', audio_path,
+                '-c:v', 'libx264',
+                '-preset', 'medium',
+                '-crf', '23',
+                '-c:a', 'aac',
+                '-b:a', '128k',
+                output_path
+            ], check=True)
+
+        # Cleanup
+        if os.path.exists(temp_output):
+            os.remove(temp_output)
+        if os.path.exists(processed_image):
+            os.remove(processed_image)
+
+        logger.info(f"✅ Wav2Lip generation completed: {output_path}")
+        return True
 
      except Exception as e:
         logger.error(f"❌ Wav2Lip error: {str(e)}")
