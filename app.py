@@ -40,8 +40,22 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 # --- Global Configuration ---
-app = FastAPI(title="Professional Avatar Video Service", version="4.0.0")
+# Configure for longer timeouts
+app = FastAPI(title="Professional Avatar Video Service", version="4.0.0", openapi_url="/openapi.json",)
 
+# Add custom middleware for timeouts
+@app.middleware("http")
+async def timeout_middleware(request: Request, call_next):
+    try:
+        # Set a longer timeout for video generation endpoints
+        if request.url.path == "/generate-video":
+            response = await asyncio.wait_for(call_next(request), timeout=3600)
+        else:
+            response = await call_next(request)
+        return response
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Request timeout")
+    
 def optimize_gpu():
     if torch.cuda.is_available():
         # Clear GPU cache
@@ -296,26 +310,17 @@ class VideoGenerator:
 
 
     async def generate_video_sadtalker(self, image_path, audio_path, output_path, quality="high"):
-     """Generate video using SadTalker with optimized GPU performance"""
      try:
         logger.info("🎭 Generating video with SadTalker...")
         
-        # Create unique result directory with absolute path
+        # Create unique result directory
         result_dir = os.path.abspath(os.path.join("temp", "sadtalker_results", str(uuid.uuid4())))
         os.makedirs(result_dir, exist_ok=True)
 
-        # Normalize paths
-        image_path = os.path.abspath(image_path)
-        audio_path = os.path.abspath(audio_path)
-        output_path = os.path.abspath(output_path)
-        
-        sadtalker_dir = os.path.join(MODELS_DIR, "SadTalker")
-        inference_py = os.path.join(sadtalker_dir, "inference.py")
-
-        # SadTalker command with ONLY supported arguments
+        # Set up command
         cmd = [
             sys.executable,
-            inference_py,
+            os.path.join(MODELS_DIR, "SadTalker", "inference.py"),
             "--driven_audio", audio_path,
             "--source_image", image_path,
             "--result_dir", result_dir,
@@ -323,60 +328,50 @@ class VideoGenerator:
             "--preprocess", "full",
             "--enhancer", "gfpgan",
             "--size", "512" if quality == "high" else "256"
-            
         ]
 
-        # Set environment variables for GPU optimization
+        # Set environment with GPU optimization
         env = {
             **os.environ,
-            'PYTHONPATH': f"{sadtalker_dir}:{os.environ.get('PYTHONPATH', '')}",
+            'PYTHONPATH': f"{os.path.join(MODELS_DIR, 'SadTalker')}:{os.environ.get('PYTHONPATH', '')}",
             'CUDA_VISIBLE_DEVICES': '0',
-            'CUDA_LAUNCH_BLOCKING': '0'
+            'CUDA_LAUNCH_BLOCKING': '0',
+            'OMP_NUM_THREADS': '4',
+            'MKL_NUM_THREADS': '4'
         }
 
-        # Run with proper error handling
         logger.info(f"Running SadTalker command: {' '.join(cmd)}")
-        
+
+        # Run with longer timeout
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+            cwd=os.path.join(MODELS_DIR, "SadTalker")
+        )
+
         try:
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                cwd=sadtalker_dir,
-                timeout=1800,  # 30 minutes timeout
-                env=env
-            )
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=3000)
+            
+            if stderr:
+                logger.error(f"SadTalker stderr: {stderr.decode()}")
 
-            if result.stderr:
-                logger.error(f"SadTalker stderr: {result.stderr}")
+            # Look for generated video
+            mp4_files = glob.glob(os.path.join(result_dir, "**/*.mp4"), recursive=True)
+            
+            if mp4_files:
+                latest_video = max(mp4_files, key=os.path.getctime)
+                shutil.move(latest_video, output_path)
+                logger.info(f"✅ SadTalker video generated: {output_path}")
+                return True
 
-            # Look for generated video with retry
-            max_retries = 5
-            for retry in range(max_retries):
-                # Look in both result_dir and its subdirectories
-                mp4_files = []
-                for root, _, files in os.walk(result_dir):
-                    mp4_files.extend([os.path.join(root, f) for f in files if f.endswith('.mp4')])
-                
-                if mp4_files:
-                    latest_video = max(mp4_files, key=os.path.getctime)
-                    shutil.move(latest_video, output_path)
-                    logger.info(f"✅ SadTalker video generated successfully: {output_path}")
-                    
-                    # Clear GPU cache after generation
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                        
-                    return True
-                    
-                if retry < max_retries - 1:
-                    await asyncio.sleep(2)
-                    
             logger.error("❌ No video file generated by SadTalker")
             return False
 
-        except subprocess.TimeoutExpired:
+        except asyncio.TimeoutError:
             logger.error("❌ SadTalker process timed out")
+            process.kill()
             return False
 
      except Exception as e:
@@ -385,11 +380,8 @@ class VideoGenerator:
         return False
      finally:
         # Cleanup
-        try:
-            if os.path.exists(result_dir):
-                shutil.rmtree(result_dir, ignore_errors=True)
-        except Exception as e:
-            logger.error(f"Cleanup error: {e}")
+        if os.path.exists(result_dir):
+            shutil.rmtree(result_dir, ignore_errors=True)
 
     async def generate_video_wav2lip(self, image_path: str, audio_path: str, output_path: str, quality: str = "high") -> bool:
      """Generate video using Wav2Lip with improved quality and GFPGAN enhancement"""

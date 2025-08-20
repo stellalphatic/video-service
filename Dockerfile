@@ -34,6 +34,9 @@ ENV MODELS_DIR=/app/models
 ENV TEMP_DIR=/app/temp
 ENV PYTHONPATH="/app:/app/models/SadTalker:${PYTHONPATH}"
 
+ENV UVICORN_TIMEOUT=3600
+ENV KEEP_ALIVE=3600
+
 # Copy requirements first for better caching
 COPY requirements.txt .
 
@@ -88,4 +91,4 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Run the application with uvicorn
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-keep-alive", "3600", "--workers", "1"]
