@@ -46,9 +46,9 @@ facexlib==0.3.0
 
 
 
-httpx
-google-cloud-pubsub
-google-auth
+# httpx
+# google-cloud-pubsub
+# google-auth
 # Celery task queue
 # celery==5.3.6
 # redis==5.0.1

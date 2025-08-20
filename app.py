@@ -42,6 +42,30 @@ logger = logging.getLogger(__name__)
 # --- Global Configuration ---
 app = FastAPI(title="Professional Avatar Video Service", version="4.0.0")
 
+def optimize_gpu():
+    if torch.cuda.is_available():
+        # Clear GPU cache
+        torch.cuda.empty_cache()
+        
+        # Enable TF32 for faster computation on Ampere GPUs
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        
+        # Set fastest possible backend
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.enabled = True
+        torch.backends.cudnn.deterministic = False
+        
+        # Set memory allocator
+        torch.cuda.set_per_process_memory_fraction(0.95)  # Use 95% of GPU memory
+        
+        # Log GPU info
+        logger.info(f"GPU Optimization enabled:")
+        logger.info(f"- Device: {torch.cuda.get_device_name(0)}")
+        logger.info(f"- Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        logger.info(f"- CUDA: {torch.version.cuda}")
+        logger.info(f"- cuDNN: {torch.backends.cudnn.version()}")
+
 # Add GPU optimization after FastAPI app initialization
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True
@@ -272,42 +296,23 @@ class VideoGenerator:
 
 
     async def generate_video_sadtalker(self, image_path, audio_path, output_path, quality="high"):
-     """Generate video using SadTalker with enhanced error handling and quality settings"""
+     """Generate video using SadTalker with optimized GPU performance"""
      try:
         logger.info("🎭 Generating video with SadTalker...")
-
-        # Verify all required models exist
-        sadtalker_dir = os.path.join(MODELS_DIR, "SadTalker")
-        model_files = [
-            "auido2exp_00300-model.pth",
-            "auido2pose_00140-model.pth",
-            "epoch_20.pth",
-            "shape_predictor_68_face_landmarks.dat",
-            "wav2lip.pth",
-            "mapping_00229-model.pth.tar",
-            "mapping_00109-model.pth.tar",
-            "SadTalker_V0.0.2_256.safetensors",
-            "SadTalker_V0.0.2_512.safetensors"
-        ]
-
-        missing_models = [f for f in model_files if not os.path.exists(os.path.join(sadtalker_dir, "checkpoints", f))]
-        if missing_models:
-            logger.error(f"❌ Missing SadTalker models: {missing_models}")
-            return False
-
-        # Normalize paths to absolute
-        image_path = os.path.abspath(image_path)
-        audio_path = os.path.abspath(audio_path)
-        output_path = os.path.abspath(output_path)
-
-        # Create unique result directory
+        
+        # Create unique result directory with absolute path
         result_dir = os.path.abspath(os.path.join("temp", "sadtalker_results", str(uuid.uuid4())))
         os.makedirs(result_dir, exist_ok=True)
 
-        # Try CLI usage first (more reliable than API)
-        logger.info("Trying SadTalker CLI...")
+        # Normalize paths
+        image_path = os.path.abspath(image_path)
+        audio_path = os.path.abspath(audio_path)
+        output_path = os.path.abspath(output_path)
+        
+        sadtalker_dir = os.path.join(MODELS_DIR, "SadTalker")
         inference_py = os.path.join(sadtalker_dir, "inference.py")
 
+        # SadTalker command with ONLY supported arguments
         cmd = [
             sys.executable,
             inference_py,
@@ -317,62 +322,75 @@ class VideoGenerator:
             "--still",
             "--preprocess", "full",
             "--enhancer", "gfpgan",
-            "--batch_size", "32",  # Increase batch size for GPU
-            "--cpu_workers", "8",  # More CPU workers
-            "--size", "512" if quality == "high" else "256",
-            "--no_smooth",
-            "--face_det_batch_size", "8"
+            "--size", "512" if quality == "high" else "256"
+             "--batch_size", "32",  # Increased batch size for GPU
+            
         ]
 
-
-        logger.info(f"Running command: {' '.join(cmd)}")
+        # Set environment variables for GPU optimization
         env = {
             **os.environ,
             'PYTHONPATH': f"{sadtalker_dir}:{os.environ.get('PYTHONPATH', '')}",
             'CUDA_VISIBLE_DEVICES': '0',
-            'CUDA_LAUNCH_BLOCKING': '0',
-            'OMP_NUM_THREADS': '8',
-            'MKL_NUM_THREADS': '8'
+            'CUDA_LAUNCH_BLOCKING': '0'
         }
 
+        # Run with proper error handling
+        logger.info(f"Running SadTalker command: {' '.join(cmd)}")
+        
         try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 cwd=sadtalker_dir,
-                timeout=1200, #20 minutes timeotu
+                timeout=1800,  # 30 minutes timeout
                 env=env
             )
 
-            logger.info(f"SadTalker stdout: {result.stdout}")
             if result.stderr:
                 logger.error(f"SadTalker stderr: {result.stderr}")
 
-            # Look for generated video
-            mp4_files = glob.glob(os.path.join(result_dir, "*.mp4"))
-            if mp4_files:
-                # Use the most recent mp4 file
-                latest_video = max(mp4_files, key=os.path.getctime)
-                shutil.move(latest_video, output_path)
-                logger.info(f"✅ SadTalker video generated successfully: {output_path}")
-                return True
-            else:
-                logger.error("❌ No video file generated by SadTalker")
-                return False
+            # Look for generated video with retry
+            max_retries = 5
+            for retry in range(max_retries):
+                # Look in both result_dir and its subdirectories
+                mp4_files = []
+                for root, _, files in os.walk(result_dir):
+                    mp4_files.extend([os.path.join(root, f) for f in files if f.endswith('.mp4')])
+                
+                if mp4_files:
+                    latest_video = max(mp4_files, key=os.path.getctime)
+                    shutil.move(latest_video, output_path)
+                    logger.info(f"✅ SadTalker video generated successfully: {output_path}")
+                    
+                    # Clear GPU cache after generation
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        
+                    return True
+                    
+                if retry < max_retries - 1:
+                    await asyncio.sleep(2)
+                    
+            logger.error("❌ No video file generated by SadTalker")
+            return False
 
         except subprocess.TimeoutExpired:
             logger.error("❌ SadTalker process timed out")
-            return False
-        except Exception as e:
-            logger.error(f"❌ SadTalker CLI failed: {str(e)}")
-            logger.error(traceback.format_exc())
             return False
 
      except Exception as e:
         logger.error(f"❌ SadTalker generation failed: {str(e)}")
         logger.error(traceback.format_exc())
         return False
+     finally:
+        # Cleanup
+        try:
+            if os.path.exists(result_dir):
+                shutil.rmtree(result_dir, ignore_errors=True)
+        except Exception as e:
+            logger.error(f"Cleanup error: {e}")
 
     async def generate_video_wav2lip(self, image_path: str, audio_path: str, output_path: str, quality: str = "high") -> bool:
      """Generate video using Wav2Lip with improved quality and portrait image handling"""
@@ -535,13 +553,9 @@ async def check_models():
 
 @app.on_event("startup")
 async def startup_event():
-    if torch.cuda.is_available():
-        # Allocate memory once on startup
-        torch.cuda.empty_cache()
-        torch.cuda.memory.empty_cache()
-        torch.cuda.set_per_process_memory_fraction(0.95)  # Use 95% of GPU memory
     """Load models on startup"""
     logger.info("🚀 Starting Professional Avatar Video Service...")
+    optimize_gpu()
     await check_models()
 
 def detect_face_landmarks(image):
@@ -1489,6 +1503,13 @@ async def root():
             "health": "/health"
         }
     }
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
 
 if __name__ == "__main__":
     uvicorn.run(

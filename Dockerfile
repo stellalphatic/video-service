@@ -34,6 +34,12 @@ ENV MODELS_DIR=/app/models
 ENV TEMP_DIR=/app/temp
 ENV PYTHONPATH="/app:/app/models/SadTalker:${PYTHONPATH}"
 
+ENV CUDA_HOME="/usr/local/cuda"
+ENV PATH="/usr/local/cuda/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
+
 # Copy requirements first for better caching
 COPY requirements.txt .
 
